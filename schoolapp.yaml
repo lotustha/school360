@@ -1,0 +1,197 @@
+project_metadata:
+  app_name: "School360 Ecosystem (Nepal Enterprise Edition)"
+  version: "4.0.0-FINAL"
+  target_market: "Schools & Colleges in Nepal (K-12)"
+  architecture: "Multi-Tenant SaaS (Software as a Service)"
+  compliance_level: "Fully Compliant (IRD, SSF, CDC, MoE Nepal)"
+
+# ==============================================================================
+# PART 1: PUBLIC MARKETING & LANDING PAGE (THE SALES ENGINE)
+# ==============================================================================
+module_marketing_website:
+  global_settings:
+    domain: "www.school360.com.np"
+    languages: ["English", "Nepali (Unicode)"]
+    analytics: ["Google Analytics 4", "Facebook Pixel", "Hotjar"]
+
+  hero_section:
+    headline: "The Operating System for Nepal's Modern Schools."
+    sub_headline: "Manage Fees, Exams, Transport, and IRD-Taxation in one app."
+    call_to_action: "Start Free Trial (No Credit Card)"
+    
+  features_showcase:
+    - title: "Nepal Govt Compliant"
+      desc: "Auto-generate Talabi Bharpai, SSF, and TDS Reports."
+    - title: "Modular Pricing"
+      desc: "Pay only for what you use. Start with just Attendance."
+    - title: "Offline Capable"
+      desc: "Works even when the internet goes down."
+
+  interactive_pricing_calculator:
+    logic: "Base Price + (Student Count * Rate) + Selected Add-ons"
+    ui_elements: 
+      - student_count_slider
+      - module_checkboxes (Transport, Exams, Accounting)
+      - instant_quote_display
+
+# ==============================================================================
+# PART 2: SUPER ADMIN (SAAS PLATFORM OWNER)
+# ==============================================================================
+module_super_admin:
+  institute_onboarding:
+    wizard_steps:
+      1: "Institute Profile (Name, PAN, Address, Contact)"
+      2: "Domain Mapping (portal.schoolname.edu.np)"
+      3: "Branding (Logo, Brand Colors, Login Background)"
+      4: "Admin Account Creation"
+  
+  subscription_management:
+    model: "Modular / A-La-Carte"
+    core_kernel:
+      price: "Rs. 10 per student/month"
+      includes: ["SIS", "Staff Dir", "Notices", "Basic Attendance"]
+    add_on_marketplace:
+      - module: "Finance & Tax" | price: "Rs. 2000/mo"
+      - module: "Transport GPS" | price: "Rs. 500/bus/mo"
+      - module: "Exam & CAS"    | price: "Rs. 1500/mo"
+      - module: "Mobile App"    | price: "Rs. 10,000/yr"
+    billing_automation:
+      - auto_invoice_generation (Monthly/Yearly)
+      - payment_gateways: ["Fonepay", "Khalti", "Esewa", "Stripe"]
+      - auto_lock_on_non_payment (Grace period: 7 days)
+
+  global_dashboard:
+    metrics:
+      - total_mrr (Monthly Recurring Revenue)
+      - active_schools_count
+      - total_sms_credits_consumed
+      - system_health_status
+
+# ==============================================================================
+# PART 3: CORE SCHOOL ERP (ADMINISTRATION)
+# ==============================================================================
+module_core_erp:
+  student_information_system (SIS):
+    - 360_profile: ["Personal", "Academic", "Medical", "Documents"]
+    - sibling_mapping: "Single Parent Login"
+    - document_vault: ["Birth Cert", "Citizenship", "Transfer Cert"]
+    - bulk_import: "Excel Import Wizard with Column Mapping AI"
+
+  staff_management:
+    - employee_database: ["Teaching", "Admin", "Support Staff"]
+    - biometric_integration: "ZKTeco/eSSL Real-time Sync Agent"
+    - leave_workflow: "App-based Apply & Approve"
+
+  front_office:
+    - visitor_kiosk: "QR Code Entry Pass"
+    - admission_crm: "Lead Tracking & Follow-up Logs"
+    - certificate_generator: ["Bonafide", "Character", "TC"]
+
+# ==============================================================================
+# PART 4: FINANCE & NEPAL GOVT COMPLIANCE (CRITICAL)
+# ==============================================================================
+module_finance_nepal:
+  accounting_standard:
+    - chart_of_accounts: "NFRS Compliant (Assets, Liability, Income, Expense)"
+    - fiscal_year_logic: "Bikram Sambat (Shrawan 1 to Ashad 32)"
+    - day_book_and_ledger
+
+  taxation_engine (IRD Rules):
+    - salary_tds: 
+      - logic: "Annual Projection -> Deductions -> Slab (1-36%) -> Monthly TDS"
+      - rebate_rules: ["Female (10%)", "Disabled (50% slab increase)"]
+    - social_security_fund (SSF):
+      - logic: "11% Employee + 20% Employer"
+      - export: "SSF Portal Compatible CSV"
+    - audit_reports:
+      - "Talabi Bharpai (Form 203 Govt Format)"
+      - "Bank Advice Letter (Nepal Bank/RBB)"
+
+  fee_collection:
+    - fee_structure_builder: ["Tuition", "Transport", "Annual", "Lab"]
+    - digital_payment: "In-App Payment via Wallets/ConnectIPS"
+    - invoice_generation: "CBMS Integrated (if turnover > 5Cr)"
+
+# ==============================================================================
+# PART 5: ACADEMIC & LMS (LEARNING & EXAMS)
+# ==============================================================================
+module_academics:
+  lms_features:
+    - homework_diary: "Upload Photo/PDF"
+    - digital_library: "E-Books & Video Links"
+    - live_class: "Zoom/Meet Integration"
+  
+  examination_system:
+    - exam_setup: "Terminal / Final / Unit Test"
+    - grading_system: "GPA / CGPA / Letter Grade (NEB Standard)"
+    - report_card_builder: "Customizable Print Layouts"
+
+  cas_engine (CDC Nepal Mandate):
+    description: "Continuous Assessment System for Grades 1-8"
+    features:
+      - rubric_grading: ["Participation", "Practical", "Discipline"]
+      - visual_tracking: "Green/Yellow/Red Learning Outcomes"
+      - result_merger: "Auto-blend CAS marks with Written Exam marks"
+
+# ==============================================================================
+# PART 6: OPERATIONS (TRANSPORT, CANTEEN, LIBRARY)
+# ==============================================================================
+module_operations:
+  smart_transportation:
+    - fleet_manager: ["Bus Profile", "Fuel Log", "Maintenance Alerts"]
+    - route_optimizer: "Google Maps API Integration"
+    - parent_app_features:
+      - "Live GPS Tracking"
+      - "RFID Boarding Alerts"
+      - "ETA Notifications"
+
+  cashless_canteen:
+    - wallet_system: "Parent loads money -> Student uses ID Card"
+    - pos_terminal: "Touch-screen ordering for staff"
+    - controls: "Daily Limit & Allergen Blocking"
+    - inventory: "Stock deduction based on recipes"
+
+  library_management:
+    - catalog: "ISBN Search & Barcode Scanning"
+    - circulation: "Issue/Return/Fine Calculation"
+
+# ==============================================================================
+# PART 7: ENTERPRISE & TECHNICAL FEATURES
+# ==============================================================================
+module_enterprise_tech:
+  localization_layer:
+    - calendar: "System-wide Bikram Sambat (BS) Support"
+    - language: "English & Nepali (Unicode) UI Toggle"
+    - fonts: "Embedded Preeti/Sagarmatha for PDF generation"
+
+  security_and_logs:
+    - audit_trail: "Immutable log of who changed marks/fees"
+    - mark_locking: "Auto-lock exam entry after 48 hours"
+    - data_privacy: "GDPR & Data Privacy Act Nepal Compliant"
+
+  offline_capability:
+    - pwa_technology: "Local caching for Attendance/Marks"
+    - auto_sync: "Background upload when connectivity returns"
+
+  multi_branch_support:
+    - group_dashboard: "Consolidated Revenue for Chain Schools"
+    - inter_branch_transfer: "Student/Staff Transfer Protocol"
+
+# ==============================================================================
+# PART 8: TECH STACK & DEPLOYMENT
+# ==============================================================================
+technical_specifications:
+  frontend:
+    web: "React.js or Angular"
+    mobile: "Flutter (iOS & Android)"
+  backend:
+    framework: "NestJS (Node.js) or Django (Python)"
+    database: "PostgreSQL (Multi-tenant Schema)"
+    caching: "Redis"
+  infrastructure:
+    cloud: "AWS (Mumbai Region for low latency)"
+    storage: "S3 Compatible Object Storage"
+  integrations:
+    sms: ["Sparrow SMS", "Aakash SMS"]
+    biometric: ["ZKTeco SDK"]
+    payment: ["Fonepay API", "Khalti API"]

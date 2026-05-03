@@ -1,0 +1,455 @@
+// This is your Prisma schema file for Supabase (PostgreSQL)
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==============================================================================
+// CORE MULTI-TENANT MODELS
+// ==============================================================================
+
+model School {
+  id         String   @id @default(cuid())
+  name       String
+  slug       String   @unique // Used as subdomain e.g. "padmodaya"
+  panNumber  String?  @unique
+  phone      String?
+  address    String?
+  logoUrl    String?
+  themeColor String?  @default("#10b981")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  users             User[]
+  academicYears     AcademicYear[]
+  faculties         Faculty[]
+  classes           Class[]
+  sections          Section[]
+  subjects          Subject[]
+  exams             Exam[]
+  employees         Employee[]
+  payrollStructures PayrollStructure[]
+  feeStructures     FeeStructure[]
+  roles             Role[]
+  subscription      SchoolSubscription?
+  students          Student[]
+  attendances       Attendance[]
+
+  @@map("schools")
+}
+
+
+model User {
+  id        String   @id @default(cuid())
+  fullName  String
+  email     String   @unique
+  password  String
+  role      String   @default("STAFF") // Legacy/Core roles: SUPER_ADMIN | SCHOOL_ADMIN | STAFF | TEACHER | PARENT | STUDENT
+  roleId    String?
+  schoolId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  school            School?          @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  customRole        Role?            @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  marks             Mark[]           @relation("StudentMarks")
+  employee          Employee?
+  userPermissions   UserPermission[] @relation("UserPermissions")
+  student           Student?
+  attendancesTaken  Attendance[]     @relation("AttendanceTaker")
+
+  @@map("users")
+}
+
+// ==============================================================================
+// STUDENTS
+// ==============================================================================
+
+model Student {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  schoolId        String
+  admissionNo     String
+  rollNumber      String?
+  classId         String
+  sectionId       String?
+
+  // Nepal Identity
+  dobBS           String
+  dobAD           DateTime?
+  gender          String
+  bloodGroup      String?
+  religion        String?
+  caste           String?
+  ethnicity       String?
+  motherTongue    String?
+
+  // Address (Nepal structure)
+  province         String?
+  district         String?
+  municipality     String?
+  wardNo           String?
+  street           String?
+  permanentAddress String?   // Full formatted string
+  temporaryAddress String?
+
+  // Status
+  enrolledAt      DateTime  @default(now())
+  leftAt          DateTime?
+  status          String    @default("ACTIVE") // ACTIVE | LEFT | GRADUATED | SUSPENDED
+
+  school          School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  class           Class     @relation(fields: [classId], references: [id])
+  section         Section?  @relation(fields: [sectionId], references: [id])
+  guardians       StudentGuardian[]
+  documents       StudentDocument[]
+  attendances     Attendance[]
+
+  @@unique([schoolId, admissionNo])
+  @@map("students")
+}
+
+model StudentGuardian {
+  id          String   @id @default(cuid())
+  studentId   String
+  name        String
+  relation    String   // Father | Mother | Guardian
+  phone       String
+  email       String?
+  occupation  String?
+  isPrimary   Boolean  @default(false)
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  @@map("student_guardians")
+}
+
+model StudentDocument {
+  id          String   @id @default(cuid())
+  studentId   String
+  type        String   // BIRTH_CERT | CITIZENSHIP | MIGRATION | CHARACTER | SLC | NEB
+  fileUrl     String
+  fileName    String
+  uploadedAt  DateTime @default(now())
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  @@map("student_documents")
+}
+
+// ==============================================================================
+// ATTENDANCE
+// ==============================================================================
+
+model Attendance {
+  id          String   @id @default(cuid())
+  studentId   String
+  schoolId    String
+  classId     String
+  sectionId   String?
+  dateBS      String                            // "2081-01-15" Bikram Sambat
+  dateAD      DateTime
+  period      Int?                              // null = daily, 1–8 = period-wise
+  status      String   @default("PRESENT")     // PRESENT | ABSENT | LATE | EXCUSED
+  note        String?
+  takenById   String
+  createdAt   DateTime @default(now())
+
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  takenBy   User     @relation("AttendanceTaker", fields: [takenById], references: [id])
+
+  @@unique([studentId, dateBS, period])
+  @@index([schoolId, dateBS])
+  @@index([schoolId, classId, dateBS])
+  @@map("attendances")
+}
+
+model AcademicYear {
+  id          String   @id @default(cuid())
+  name        String // e.g. "2081-2082"
+  startDateBS String // Bikram Sambat date string e.g. "2081-04-01"
+  endDateBS   String
+  isCurrent   Boolean  @default(false)
+  schoolId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  exams  Exam[]
+
+  @@map("academic_years")
+}
+
+// ==============================================================================
+// ACADEMIC STRUCTURE (NEPAL SYSTEM SUPPORT)
+// ==============================================================================
+
+model Faculty {
+  id        String   @id @default(cuid())
+  name      String // e.g. "Science", "Management"
+  schoolId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classes Class[]
+
+  @@map("faculties")
+}
+
+model Class {
+  id        String   @id @default(cuid())
+  name      String // e.g. "Class 11"
+  facultyId String? // Optional for lower grades
+  schoolId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school   School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  faculty  Faculty?  @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+  sections Section[]
+  subjects Subject[]
+  students Student[]
+
+  @@map("classes")
+}
+
+model Section {
+  id        String   @id @default(cuid())
+  name      String // e.g. "A", "B", "Rose"
+  classId   String
+  schoolId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school   School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  class    Class     @relation(fields: [classId], references: [id], onDelete: Cascade)
+  students Student[]
+
+  @@map("sections")
+}
+
+model Subject {
+  id          String   @id @default(cuid())
+  name        String // e.g. "Nepali"
+  code        String // e.g. "0002"
+  classId     String
+  creditHours Float? // For NEB GPA calculation
+  schoolId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  school     School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  class      Class              @relation(fields: [classId], references: [id], onDelete: Cascade)
+  components SubjectComponent[]
+
+  @@map("subjects")
+}
+
+enum ComponentType {
+  INTERNAL
+  EXTERNAL
+  CAS
+}
+
+model SubjectComponent {
+  id        String        @id @default(cuid())
+  subjectId String
+  type      ComponentType
+  subCode   String? // e.g. "0003" for Internal
+  fullMarks Float
+  passMarks Float
+  breakdown Json? // e.g. {"participation": 3, "project": 16, "term1": 3, "term2": 3}
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  marks   Mark[]
+
+  @@map("subject_components")
+}
+
+// ==============================================================================
+// EVALUATION & EXAMINATIONS
+// ==============================================================================
+
+model Exam {
+  id             String    @id @default(cuid())
+  name           String // e.g. "First Term Examination"
+  academicYearId String
+  schoolId       String
+  startDate      DateTime?
+  endDate        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  school       School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  marks        Mark[]
+
+  @@map("exams")
+}
+
+model Mark {
+  id                 String   @id @default(cuid())
+  studentId          String // Links to User (Student role)
+  examId             String
+  subjectComponentId String
+  obtainedMarks      Float?
+  breakdownMarks     Json? // e.g. {"participation": 3, "project": 15, "term1": 2, "term2": 2.5}
+  isAbsent           Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  student   User             @relation("StudentMarks", fields: [studentId], references: [id], onDelete: Cascade)
+  exam      Exam             @relation(fields: [examId], references: [id], onDelete: Cascade)
+  component SubjectComponent @relation(fields: [subjectComponentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, examId, subjectComponentId])
+  @@map("marks")
+}
+
+// ==============================================================================
+// HR & FINANCE (FOUNDATIONAL)
+// ==============================================================================
+
+model Employee {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  panNumber   String?  @unique
+  ssfNumber   String?  @unique
+  bankName    String?
+  bankAccount String?
+  schoolId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school  School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  payroll PayrollStructure?
+
+  @@map("employees")
+}
+
+model PayrollStructure {
+  id            String   @id @default(cuid())
+  employeeId    String   @unique
+  baseSalary    Float
+  tdsPercentage Float    @default(0) // Tax Deducted at Source
+  ssfEnabled    Boolean  @default(false) // Social Security Fund
+  schoolId      String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  school   School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@map("payroll_structures")
+}
+
+model FeeStructure {
+  id        String   @id @default(cuid())
+  name      String // e.g. "Monthly Tuition Fee"
+  amount    Float
+  classId   String? // If null, applies globally
+  schoolId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@map("fee_structures")
+}
+
+// ==============================================================================
+// GRANULAR RBAC & PERMISSIONS
+// ==============================================================================
+
+model Permission {
+  id          String   @id @default(cuid())
+  code        String   @unique // e.g., "gradebook:edit", "finance:view"
+  description String?
+  createdAt   DateTime @default(now())
+
+  rolePermissions RolePermission[]
+  userPermissions UserPermission[]
+
+  @@map("permissions")
+}
+
+model Role {
+  id          String  @id @default(cuid())
+  name        String // e.g., "TEACHER", "ACCOUNTANT"
+  description String?
+  schoolId    String? // Null means it's a global/system role
+
+  school      School?          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  users       User[]
+  permissions RolePermission[]
+
+  @@unique([name, schoolId])
+  @@map("roles")
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserPermission {
+  id           String  @id @default(cuid())
+  userId       String
+  permissionId String
+  isGranted    Boolean @default(true) // True = Explicitly Granted. False = Explicitly Revoked (overriding role).
+
+  user       User       @relation("UserPermissions", fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@map("user_permissions")
+}
+
+// ==============================================================================
+// SUBSCRIPTION & MODULES (30-DAY TRIAL SYSTEM)
+// ==============================================================================
+
+model SchoolSubscription {
+  id           String         @id @default(cuid())
+  schoolId     String         @unique
+  studentCount Int            @default(100)
+  plan         String         @default("TRIAL") // TRIAL | ACTIVE | EXPIRED | CANCELLED
+  trialEndsAt  DateTime
+  school       School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  modules      SchoolModule[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@map("school_subscriptions")
+}
+
+model SchoolModule {
+  id             String             @id @default(cuid())
+  subscriptionId String
+  moduleKey      String             // FINANCE_TAX | EXAM_CAS | TRANSPORT_GPS | MOBILE_APP
+  isActive       Boolean            @default(true)
+  monthlyPrice   Float
+  subscription   SchoolSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  createdAt      DateTime           @default(now())
+
+  @@unique([subscriptionId, moduleKey])
+  @@map("school_modules")
+}
