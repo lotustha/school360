@@ -1,5 +1,7 @@
 import { Metadata } from "next"
-import { notFound } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
+import { getServerSession } from "next-auth"
+import { authOptions } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { getTrialStatus, getActiveModules } from "@/lib/modules"
 import { DashboardClient } from "./dashboard-client"
@@ -15,6 +17,11 @@ export default async function TenantDashboardPage({
   params: Promise<{ domain: string }>
 }) {
   const { domain } = await params
+
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.schoolId) {
+    redirect(`/${domain}/login`)
+  }
 
   const school = await prisma.school.findUnique({
     where: { slug: domain },

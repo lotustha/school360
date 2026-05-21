@@ -2,19 +2,22 @@
 
 import { ColumnDef } from "@tanstack/react-table"
 import { Badge } from "@/components/ui/badge"
+import { Avatar } from "@/components/ui/avatar-img"
 import { cn } from "@/lib/utils"
 import { formatBS } from "@/lib/nepali-date"
 
 export type AttendanceHistoryRow = {
-  id:          string
-  studentName: string
-  admissionNo: string
-  className:   string
-  sectionName: string | null
-  dateBS:      string
-  status:      string
-  takenBy:     string
-  note:        string | null
+  id:                 string
+  studentName:        string
+  studentAvatarUrl:   string | null
+  takenByAvatarUrl:   string | null
+  admissionNo:        string
+  className:          string
+  sectionName:        string | null
+  dateBS:             string
+  status:             string
+  takenBy:            string
+  note:               string | null
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -36,9 +39,12 @@ export const columns: ColumnDef<AttendanceHistoryRow>[] = [
     accessorKey: "studentName",
     header: "Student",
     cell: ({ row }) => (
-      <div>
-        <div className="font-medium text-sm">{row.getValue("studentName")}</div>
-        <div className="text-xs text-muted-foreground font-mono">{row.original.admissionNo}</div>
+      <div className="flex items-center gap-2.5">
+        <Avatar name={row.getValue("studentName")} url={row.original.studentAvatarUrl} size={28} />
+        <div className="min-w-0">
+          <div className="font-medium text-sm truncate">{row.getValue("studentName")}</div>
+          <div className="text-xs text-muted-foreground font-mono truncate">{row.original.admissionNo}</div>
+        </div>
       </div>
     ),
   },
@@ -67,6 +73,11 @@ export const columns: ColumnDef<AttendanceHistoryRow>[] = [
   {
     accessorKey: "takenBy",
     header: "Taken By",
-    cell: ({ row }) => <span className="text-sm text-muted-foreground">{row.getValue("takenBy")}</span>,
+    cell: ({ row }) => (
+      <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+        <Avatar name={row.getValue("takenBy")} url={row.original.takenByAvatarUrl} size={20} />
+        <span className="truncate">{row.getValue("takenBy")}</span>
+      </span>
+    ),
   },
 ]

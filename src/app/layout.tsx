@@ -24,7 +24,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.variable} ${firaCode.variable} antialiased`}>
+      {/* suppressHydrationWarning on <body> tolerates browser-extension DOM injections
+          (Grammarly, password managers, translators) that shift Radix useId() counters. */}
+      <body
+        suppressHydrationWarning
+        className={`${inter.variable} ${firaCode.variable} antialiased`}
+      >
         <Providers>{children}</Providers>
       </body>
     </html>

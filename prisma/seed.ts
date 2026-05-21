@@ -113,7 +113,7 @@ async function main() {
     }
   })
 
-  // Nepali Subject with Internal/External marking
+  // Nepali Subject (plain — components live on Evaluation, not on Subject)
   const subject = await prisma.subject.create({
     data: {
       name: 'Nepali',
@@ -121,24 +121,121 @@ async function main() {
       classId: class11.id,
       schoolId: school.id,
       creditHours: 4.0,
-      components: {
-        create: [
-          {
-            type: 'INTERNAL',
-            subCode: '0003',
-            fullMarks: 25,
-            passMarks: 10,
-            breakdown: { participation: 3, project: 16, term1: 3, term2: 3 }
-          },
-          {
-            type: 'EXTERNAL',
-            fullMarks: 75,
-            passMarks: 27,
-          }
-        ]
-      }
     }
   })
+
+  // 6. Academic Year + Exam (so Marks workspace has something selectable)
+  console.log('Seeding academic year + exam...')
+  const academicYear = await prisma.academicYear.create({
+    data: {
+      name:        '2081-2082',
+      startDateBS: '2081-04-01',
+      endDateBS:   '2082-03-30',
+      isCurrent:   true,
+      schoolId:    school.id,
+    },
+  })
+
+  // 6a. Three Terminal Exams (testing events; no dates, no weightage)
+  const examTerm1 = await prisma.exam.create({
+    data: { name: 'Term 1',     schoolId: school.id, academicYearId: academicYear.id },
+  })
+  const examTerm2 = await prisma.exam.create({
+    data: { name: 'Term 2',     schoolId: school.id, academicYearId: academicYear.id },
+  })
+  await prisma.exam.create({
+    data: { name: 'Final Term', schoolId: school.id, academicYearId: academicYear.id },
+  })
+
+  // 6b. Sample Evaluation: "First Internal Evaluation" for Class 11 (Math/Nepali)
+  console.log('Seeding sample evaluation...')
+  const evalFirstInternal = await prisma.evaluation.create({
+    data: {
+      schoolId:       school.id,
+      classId:        class11.id,
+      academicYearId: academicYear.id,
+      name:           'First Internal Evaluation',
+      sequenceNumber: 1,
+      isFinal:        false,
+    },
+  })
+
+  const subjectEval = await prisma.subjectEvaluation.create({
+    data: {
+      evaluationId: evalFirstInternal.id,
+      subjectId:    subject.id,
+      internalMax:  50,
+      externalMax:  0,
+    },
+  })
+
+  // Components: Attendance(4, ATTENDANCE) + Project(36, MANUAL) + Term 1(10, DERIVED, source=50)
+  await prisma.evaluationComponent.createMany({
+    data: [
+      {
+        subjectEvaluationId: subjectEval.id,
+        part:                'INTERNAL',
+        label:               'Attendance',
+        maxMarks:            4,
+        orderIndex:          0,
+        source:              'ATTENDANCE',
+      },
+      {
+        subjectEvaluationId: subjectEval.id,
+        part:                'INTERNAL',
+        label:               'Practical and Project Work',
+        maxMarks:            36,
+        orderIndex:          1,
+        source:              'MANUAL',
+      },
+      {
+        subjectEvaluationId: subjectEval.id,
+        part:                'INTERNAL',
+        label:               'Term 1 Exam',
+        maxMarks:            10,
+        orderIndex:          2,
+        source:              'DERIVED_FROM_EXAM',
+        sourceExamId:        examTerm1.id,
+        sourceMaxMarks:      50,
+      },
+    ],
+  })
+
+  // 7. Sample students in Class 11 Section A
+  console.log('Seeding sample students...')
+  const sampleStudents = [
+    { name: 'Aarav Sharma',    gender: 'MALE',   roll: '01' },
+    { name: 'Anaya Pokhrel',   gender: 'FEMALE', roll: '02' },
+    { name: 'Bishal Thapa',    gender: 'MALE',   roll: '03' },
+    { name: 'Diya KC',         gender: 'FEMALE', roll: '04' },
+    { name: 'Eshan Adhikari',  gender: 'MALE',   roll: '05' },
+  ]
+  for (let i = 0; i < sampleStudents.length; i++) {
+    const s = sampleStudents[i]
+    const studentUser = await prisma.user.create({
+      data: {
+        fullName: s.name,
+        email:    `student${i + 1}@padmodaya.edu`,
+        password: hashedPassword,
+        role:     'STUDENT',
+        schoolId: school.id,
+      },
+    })
+    await prisma.student.create({
+      data: {
+        userId:         studentUser.id,
+        schoolId:       school.id,
+        admissionNo:    `2081-${String(i + 1).padStart(4, '0')}`,
+        rollNumber:     s.roll,
+        classId:        class11.id,
+        sectionId:      sectionA.id,
+        academicYearId: academicYear.id,
+        dobBS:          '2065-03-15',
+        gender:         s.gender,
+        status:         'ACTIVE',
+      },
+    })
+  }
 
   console.log('Seeding completed successfully! 🌱')
   console.log(`Test Login -> Email: admin@padmodaya.edu | Password: password123 | Tenant URL: http://padmodaya.localhost:3000`)

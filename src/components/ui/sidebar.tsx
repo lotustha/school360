@@ -139,7 +139,11 @@ function SidebarProvider({
             } as React.CSSProperties
           }
           className={cn(
-            "group/sidebar-wrapper has-data-[variant=inset]:bg-sidebar flex min-h-svh w-full",
+            // h-svh (not just min-h-svh) so the inner <main className="overflow-auto">
+            // actually scrolls. Without this the wrapper grows past the viewport,
+            // main grows with it, and "sticky top-0" inside main has no scroll
+            // ancestor — so headers/rails fail to pin while the window scrolls.
+            "group/sidebar-wrapper has-data-[variant=inset]:bg-sidebar flex h-svh w-full",
             className
           )}
           {...props}
@@ -309,7 +313,10 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
     <main
       data-slot="sidebar-inset"
       className={cn(
-        "bg-background relative flex w-full flex-1 flex-col",
+        // `min-w-0` is REQUIRED: as a flex child of the sidebar layout, the
+        // default `min-width: auto` lets a wide table inside the page push
+        // the inset wider than the viewport (= page-level horizontal scroll).
+        "bg-background relative flex min-w-0 w-full flex-1 flex-col",
         "md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
         className
       )}
@@ -374,7 +381,7 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="sidebar-content"
       data-sidebar="content"
       className={cn(
-        "flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden",
+        "flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto group-data-[collapsible=icon]:overflow-hidden",
         className
       )}
       {...props}

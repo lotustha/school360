@@ -8,6 +8,7 @@ import { todayBS } from "@/lib/nepali-date"
 import { Button } from "@/components/ui/button"
 import { AttendanceBoard } from "./attendance-board"
 import { getServerSession } from "next-auth"
+import { sortClassesByFacultyThenName } from "@/lib/class-sort"
 import { authOptions } from "@/auth"
 import type { AttendanceStatus } from "@/actions/attendance"
 
@@ -31,11 +32,17 @@ export default async function TakeAttendancePage({
   if (!school) notFound()
 
   // Load all classes + sections for the selector
-  const classes = await prisma.class.findMany({
-    where: { schoolId: school.id },
-    include: { sections: { orderBy: { name: "asc" } } },
+  const rawClasses = await prisma.class.findMany({
+    where:   { schoolId: school.id },
+    include: {
+      sections: { orderBy: { name: "asc" } },
+      faculty:  { select: { name: true } },
+    },
     orderBy: { name: "asc" },
   })
+  const classes = sortClassesByFacultyThenName(
+    rawClasses.map(c => ({ ...c, facultyName: c.faculty?.name ?? null })),
+  )
 
   // If no class selected, default to first available
   const activeClassId   = classId   ?? classes[0]?.id

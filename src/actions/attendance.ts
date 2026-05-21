@@ -122,7 +122,7 @@ export async function getTodaySummary(schoolId: string) {
   })
 }
 
-/** Fetch attendance history with filters. */
+/** Fetch attendance history with filters. Returns records with resolved class/section names. */
 export async function getAttendanceHistory(
   schoolId: string,
   filters: {
@@ -134,7 +134,7 @@ export async function getAttendanceHistory(
     status?:    string
   }
 ) {
-  return prisma.attendance.findMany({
+  const records = await prisma.attendance.findMany({
     where: {
       schoolId,
       ...(filters.classId   && { classId:   filters.classId }),
@@ -145,12 +145,31 @@ export async function getAttendanceHistory(
       ...(filters.toBS      && { dateBS: { lte: filters.toBS   } }),
     },
     include: {
-      student: { include: { user: { select: { fullName: true } } } },
-      takenBy: { select: { fullName: true } },
+      student: { include: { user: { select: { fullName: true, avatarUrl: true } } } },
+      takenBy: { select: { fullName: true, avatarUrl: true } },
     },
     orderBy: [{ dateBS: "desc" }, { student: { admissionNo: "asc" } }],
     take: 500,
   })
+
+  const classIds   = [...new Set(records.map(r => r.classId))]
+  const sectionIds = [...new Set(records.map(r => r.sectionId).filter(Boolean))] as string[]
+
+  const [classes, sections] = await Promise.all([
+    prisma.class.findMany({ where: { id: { in: classIds } }, select: { id: true, name: true } }),
+    sectionIds.length > 0
+      ? prisma.section.findMany({ where: { id: { in: sectionIds } }, select: { id: true, name: true } })
+      : [],
+  ])
+
+  const classMap   = new Map(classes.map(c => [c.id, c.name]))
+  const sectionMap = new Map(sections.map(s => [s.id, s.name]))
+
+  return records.map(r => ({
+    ...r,
+    className:   classMap.get(r.classId)   ?? "",
+    sectionName: r.sectionId ? (sectionMap.get(r.sectionId) ?? null) : null,
+  }))
 }
 
 /** Monthly attendance summary for one student. */

@@ -1,3 +1,7 @@
+import { getServerSession, type Session } from "next-auth"
+import { authOptions } from "@/auth"
+import { prisma } from "@/lib/prisma"
+
 export const SYSTEM_PERMISSIONS = [
   {
     module: "Academics",
@@ -11,10 +15,10 @@ export const SYSTEM_PERMISSIONS = [
   {
     module: "Finance & Accounts",
     permissions: [
-      { code: "finance:view", label: "View Finances", description: "View fee structures and payment history." },
-      { code: "finance:manage", label: "Manage Finances", description: "Create fee structures, issue invoices, and record payments." },
-      { code: "payroll:view", label: "View Payroll", description: "View employee payroll and salary sheets." },
-      { code: "payroll:manage", label: "Manage Payroll", description: "Process payroll, TDS, and SSF calculations." },
+      { code: "finance:view",   label: "View Finances",   description: "View fee structures, vouchers, ledger, and reports." },
+      { code: "finance:manage", label: "Manage Finances", description: "Create/post vouchers, manage chart of accounts, close fiscal year." },
+      { code: "payroll:view",   label: "View Payroll",    description: "View employee payroll and salary sheets." },
+      { code: "payroll:manage", label: "Manage Payroll",  description: "Process payroll, TDS, and SSF calculations." },
     ]
   },
   {
@@ -41,3 +45,57 @@ export const SYSTEM_PERMISSIONS = [
 export const getAllPermissionCodes = () => {
   return SYSTEM_PERMISSIONS.flatMap(module => module.permissions.map(p => p.code));
 };
+
+// ─── ENFORCEMENT HELPERS ────────────────────────────────────────────────────
+// Legacy roles bypass granular permission checks:
+//   SUPER_ADMIN, SCHOOL_ADMIN → always allowed
+// Everyone else: explicit UserPermission overrides win, otherwise their custom
+// Role's RolePermission rows decide. No row = no permission.
+
+const ADMIN_ROLES = new Set(["SUPER_ADMIN", "SCHOOL_ADMIN"])
+
+export async function getSchoolSession(): Promise<Session> {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.schoolId) {
+    throw new Error("UNAUTHORIZED")
+  }
+  return session
+}
+
+export async function hasPermission(session: Session, code: string): Promise<boolean> {
+  if (ADMIN_ROLES.has(session.user.role)) return true
+
+  const userId = session.user.id
+  if (!userId) return false
+
+  // Explicit user-level override (grant or revoke) wins
+  const userPerm = await prisma.userPermission.findFirst({
+    where: { userId, permission: { code } },
+    select: { isGranted: true },
+  })
+  if (userPerm) return userPerm.isGranted
+
+  // Role-based grant
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { roleId: true },
+  })
+  if (!user?.roleId) return false
+
+  const rolePerm = await prisma.rolePermission.findFirst({
+    where: { roleId: user.roleId, permission: { code } },
+    select: { id: true },
+  })
+  return !!rolePerm
+}
+
+/**
+ * Server-action gate. Resolves session, verifies it has a school, and checks
+ * permission `code`. Throws on failure. Returns the session so callers can
+ * use session.user.schoolId / session.user.id without a second lookup.
+ */
+export async function requirePermission(code: string): Promise<Session> {
+  const session = await getSchoolSession()
+  if (await hasPermission(session, code)) return session
+  throw new Error("FORBIDDEN")
+}

@@ -2,7 +2,7 @@ import { Metadata } from "next"
 import { prisma } from "@/lib/prisma"
 import Link from "next/link"
 import {
-  GraduationCap, BookOpen, Users, FolderTree,
+  GraduationCap, BookOpen, Users, FolderTree, CalendarRange,
   ArrowRight, Plus, AlertCircle, ChevronRight,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -21,7 +21,7 @@ export default async function AcademicsOverviewPage({
   const school = await prisma.school.findUnique({ where: { slug: domain } })
   if (!school) notFound()
 
-  const [faculties, classes, sectionCount, subjectCount] = await Promise.all([
+  const [faculties, classes, sectionCount, subjectCount, academicYearCount] = await Promise.all([
     prisma.faculty.findMany({
       where: { schoolId: school.id },
       include: { _count: { select: { classes: true } } },
@@ -36,21 +36,23 @@ export default async function AcademicsOverviewPage({
     }),
     prisma.section.count({ where: { schoolId: school.id } }),
     prisma.subject.count({ where: { schoolId: school.id } }),
+    prisma.academicYear.count({ where: { schoolId: school.id } }),
   ])
 
   const isEmpty = faculties.length === 0 && classes.length === 0
 
   const statCards = [
-    { title: "Faculties",  value: faculties.length, desc: "Streams & branches", icon: FolderTree,    color: "text-violet-600", bg: "bg-violet-500/8",  border: "border-violet-500/20", href: "/academics/faculties" },
-    { title: "Classes",    value: classes.length,   desc: "Grades configured",  icon: GraduationCap, color: "text-primary",    bg: "bg-primary/8",     border: "border-primary/20",    href: "/academics/classes" },
-    { title: "Sections",   value: sectionCount,     desc: "Student groups",     icon: Users,         color: "text-blue-600",   bg: "bg-blue-500/8",    border: "border-blue-500/20",   href: "/academics/sections" },
-    { title: "Subjects",   value: subjectCount,     desc: "With components",    icon: BookOpen,      color: "text-amber-600",  bg: "bg-amber-500/8",   border: "border-amber-500/20",  href: "/academics/subjects" },
+    { title: "Faculties",  value: faculties.length,    desc: "Streams & branches",   icon: FolderTree,    color: "text-violet-600", bg: "bg-violet-500/8",  border: "border-violet-500/20", href: "/academics/faculties" },
+    { title: "Classes",    value: classes.length,      desc: "Grades configured",    icon: GraduationCap, color: "text-primary",    bg: "bg-primary/8",     border: "border-primary/20",    href: "/academics/classes" },
+    { title: "Sections",   value: sectionCount,        desc: "Student groups",       icon: Users,         color: "text-blue-600",   bg: "bg-blue-500/8",    border: "border-blue-500/20",   href: "/academics/sections" },
+    { title: "Subjects",   value: subjectCount,        desc: "With components",      icon: BookOpen,      color: "text-amber-600",  bg: "bg-amber-500/8",   border: "border-amber-500/20",  href: "/academics/subjects" },
+    { title: "Sessions",   value: academicYearCount,   desc: "Per-faculty AYs",      icon: CalendarRange, color: "text-rose-600",   bg: "bg-rose-500/8",    border: "border-rose-500/20",   href: "/academics/years" },
   ]
 
   return (
     <div className="space-y-6">
       {/* Stats row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         {statCards.map(stat => (
           <Link key={stat.title} href={stat.href} className="block group">
             <div className={cn(

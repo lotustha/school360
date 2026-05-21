@@ -2,36 +2,15 @@
 
 import * as React from "react";
 import { Loader2, AlertCircle } from "lucide-react";
-
-// --- PRODUCTION IMPORTS (Uncomment these in your actual app) ---
-// import { useSearchParams } from "next/navigation";
-// import { signIn } from "next-auth/react"; 
-
-// --- MOCK IMPLEMENTATIONS FOR PREVIEW (Remove these in production) ---
-const useSearchParams = () => {
-  // Simulates ?msg=onboarded for preview purposes if needed
-  // In real app, this hook reads the URL
-  return new URLSearchParams(typeof window !== 'undefined' ? window.location.search : "");
-};
-
-const signIn = async (provider: string, options: any) => {
-  console.log("Mock Login:", provider, options);
-  await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate network delay
-  
-  // Simulate success (return undefined/null error) or failure
-  if (options.email === "fail@test.com") {
-    return { error: "Invalid credentials" };
-  }
-  return { error: null, ok: true, status: 200, url: null };
-};
-// ------------------------------------------------------------------
+import { useSearchParams } from "next/navigation";
+import { signIn } from "next-auth/react";
 
 interface LoginFormProps {
   schoolSlug: string;
   callbackUrl?: string;
 }
 
-export default function LoginForm({ schoolSlug, callbackUrl }: LoginFormProps) {
+export default function LoginForm({ callbackUrl }: LoginFormProps) {
   const searchParams = useSearchParams();
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [isPending, setIsPending] = React.useState(false);
@@ -63,17 +42,9 @@ export default function LoginForm({ schoolSlug, callbackUrl }: LoginFormProps) {
         setErrorMessage("Invalid email or password.");
         setIsPending(false);
       } else {
-        // Success
-        console.log("Login Successful! Redirecting...");
-        // In preview we just alert, in prod we redirect
-        if (typeof window !== 'undefined' && !document.location.href.includes('googleusercontent')) {
-             window.location.href = callbackUrl || `/app/${schoolSlug}`;
-        } else {
-             setIsPending(false);
-             alert(`Redirecting to: /app/${schoolSlug}`);
-        }
+        window.location.href = callbackUrl || "/";
       }
-    } catch (error) {
+    } catch {
       setErrorMessage("System error. Please try again later.");
       setIsPending(false);
     }

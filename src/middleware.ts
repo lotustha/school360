@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateSession } from "../utils/supabase/middleware";
 
 /**
- * School360 Proxy Logic - Robust Edition
+ * School360 Proxy Logic — subdomain routing only.
+ * Auth runs through NextAuth (JWT strategy in `src/auth.ts`); no Supabase
+ * session refresh is needed in middleware.
  */
 export default async function proxy(req: NextRequest) {
   const url = req.nextUrl;
@@ -54,6 +55,5 @@ export default async function proxy(req: NextRequest) {
     response = NextResponse.next();
   }
 
-  // Ensure Supabase sessions are refreshed and cookies are set correctly
-  return await updateSession(req, response);
+  return response;
 }

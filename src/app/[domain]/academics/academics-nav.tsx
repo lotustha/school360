@@ -2,16 +2,18 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { BookOpen, GraduationCap, Users, FolderTree, LayoutDashboard } from "lucide-react"
+import { BookOpen, GraduationCap, Users, FolderTree, LayoutDashboard, CalendarRange, ClipboardCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { motion } from "framer-motion"
 
 const navItems = [
-  { title: "Overview",  href: "/academics",          icon: LayoutDashboard, exact: true },
-  { title: "Faculties", href: "/academics/faculties", icon: FolderTree },
-  { title: "Classes",   href: "/academics/classes",   icon: GraduationCap },
-  { title: "Sections",  href: "/academics/sections",  icon: Users },
-  { title: "Subjects",  href: "/academics/subjects",  icon: BookOpen },
+  { title: "Overview",    href: "/academics",            icon: LayoutDashboard, exact: true },
+  { title: "Faculties",   href: "/academics/faculties",  icon: FolderTree },
+  { title: "Sessions",    href: "/academics/years",      icon: CalendarRange },
+  { title: "Classes",     href: "/academics/classes",    icon: GraduationCap },
+  { title: "Sections",    href: "/academics/sections",   icon: Users },
+  { title: "Subjects",    href: "/academics/subjects",   icon: BookOpen },
+  { title: "Evaluations", href: "/academics/evaluations",icon: ClipboardCheck },
 ]
 
 export function AcademicsNav() {

@@ -24,8 +24,10 @@ import {
 
 export function CommandMenu() {
   const [open, setOpen] = React.useState(false)
+  const [mounted, setMounted] = React.useState(false)
 
   React.useEffect(() => {
+    setMounted(true)
     const down = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
@@ -52,6 +54,7 @@ export function CommandMenu() {
         </kbd>
       </div>
 
+      {mounted && (
       <CommandDialog open={open} onOpenChange={setOpen}>
         <CommandInput placeholder="Type a command or search..." />
         <CommandList>
@@ -90,6 +93,7 @@ export function CommandMenu() {
           </CommandGroup>
         </CommandList>
       </CommandDialog>
+      )}
     </>
   )
 }

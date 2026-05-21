@@ -34,15 +34,17 @@ export default async function AttendanceHistoryPage({
   })
 
   const rows: AttendanceHistoryRow[] = records.map(r => ({
-    id:          r.id,
-    studentName: r.student.user.fullName,
-    admissionNo: r.student.admissionNo,
-    className:   "",   // would need class join — simplified
-    sectionName: null,
-    dateBS:      r.dateBS,
-    status:      r.status,
-    takenBy:     r.takenBy.fullName,
-    note:        r.note,
+    id:               r.id,
+    studentName:      r.student.user.fullName,
+    studentAvatarUrl: r.student.user.avatarUrl ?? null,
+    takenByAvatarUrl: r.takenBy.avatarUrl ?? null,
+    admissionNo:      r.student.admissionNo,
+    className:        r.className,
+    sectionName:      r.sectionName,
+    dateBS:           r.dateBS,
+    status:           r.status,
+    takenBy:          r.takenBy.fullName,
+    note:             r.note,
   }))
 
   return (

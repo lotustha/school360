@@ -9,7 +9,7 @@ import {
 import {
   Home, Users, Settings, BookOpen, CreditCard, CalendarDays,
   GraduationCap, BarChart3, Building2, ChevronRight,
-  ShoppingCart, UtensilsCrossed, Layers, Bell,
+  ShoppingCart, UtensilsCrossed, Layers, Bell, Calculator,
 } from "lucide-react"
 import Link from "next/link"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -26,9 +26,10 @@ const mainNav = [
 ]
 
 const financeNav = [
-  { title: "Finance",  url: "/finance",  icon: CreditCard },
-  { title: "Canteen",  url: "/canteen",  icon: UtensilsCrossed },
-  { title: "Reports",  url: "/reports",  icon: BarChart3 },
+  { title: "Finance",    url: "/finance",    icon: CreditCard },
+  { title: "Accounting", url: "/accounting", icon: Calculator },
+  { title: "Canteen",    url: "/canteen",    icon: UtensilsCrossed },
+  { title: "Reports",    url: "/reports",    icon: BarChart3 },
 ]
 
 const adminNav = [

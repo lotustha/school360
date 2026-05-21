@@ -12,12 +12,30 @@ export const NEPAL_DISTRICTS = [
   "Western Rukum",
 ] as const
 
-export const NEPAL_CASTE_CATEGORIES = [
-  "Brahmin/Chhetri","Janajati","Dalit","Madhesi","Muslim","Other",
+// EMIS Nepal ethnic/caste categories (DoE standard 10 groups)
+export const EMIS_ETHNICITY_GROUPS = [
+  "Brahmin-Hill",
+  "Chhetri",
+  "Dalit-Hill",
+  "Dalit-Terai",
+  "Newar",
+  "Janajati-Hill",
+  "Janajati-Terai",
+  "Madhesi-Other",
+  "Muslim",
+  "Other",
 ] as const
 
+// Legacy compatibility
+export const NEPAL_CASTE_CATEGORIES = EMIS_ETHNICITY_GROUPS
+
 export const NEPAL_RELIGIONS = [
-  "Hindu","Buddhist","Muslim","Kirat","Christian","Other",
+  "Hindu","Buddhist","Muslim","Kirat","Christian","Prakriti","Bon","Jain","Bahai","Other",
+] as const
+
+export const MOTHER_TONGUE_OPTIONS = [
+  "Nepali","Maithili","Bhojpuri","Tharu","Tamang","Newari","Magar","Awadhi",
+  "Doteli","Urdu","Sunuwar","Limbu","Gurung","Rai","Sherpa","Bajjika","Rajbanshi","Other",
 ] as const
 
 export const BLOOD_GROUPS = [
@@ -30,8 +48,47 @@ export const GUARDIAN_RELATIONS = [
 
 export const GENDER_OPTIONS = ["Male","Female","Other"] as const
 
+// EMIS disability classification (DoE standard)
+export const DISABILITY_OPTIONS = [
+  { value: "NONE",         label: "None" },
+  { value: "PHYSICAL",     label: "Physical" },
+  { value: "VISUAL",       label: "Visual / Blind" },
+  { value: "HEARING",      label: "Hearing / Deaf" },
+  { value: "INTELLECTUAL", label: "Intellectual" },
+  { value: "SPEECH",       label: "Speech" },
+  { value: "MULTIPLE",     label: "Multiple Disabilities" },
+] as const
+
+// EMIS scholarship categories
+export const SCHOLARSHIP_TYPES = [
+  { value: "NONE",       label: "None" },
+  { value: "GOVERNMENT", label: "Government (DoE)" },
+  { value: "SCHOOL",     label: "School Scholarship" },
+  { value: "DALIT",      label: "Dalit Scholarship" },
+  { value: "JANAJATI",   label: "Janajati Scholarship" },
+  { value: "DISABILITY", label: "Disability Scholarship" },
+  { value: "OTHER",      label: "Other" },
+] as const
+
+// Guardian/parent education levels (EMIS)
+export const EDUCATION_LEVELS = [
+  "Illiterate",
+  "Literate (Non-formal)",
+  "Primary (Grade 1–5)",
+  "Lower Secondary (Grade 6–8)",
+  "Secondary (SLC/SEE)",
+  "Higher Secondary (+2/NEB)",
+  "Bachelor's Degree",
+  "Master's Degree",
+  "PhD / Above",
+] as const
+
 export const EMPLOYEE_TYPES = ["Permanent","Contract","Part-Time","Temporary"] as const
 
 export const ACADEMIC_LEVELS = [
   "SLC/SEE","+2/NEB","Bachelor","Master","PhD","Other",
+] as const
+
+export const NATIONALITY_OPTIONS = [
+  "Nepali","Indian","Chinese","Other",
 ] as const
