@@ -7,7 +7,6 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { NepaliDateInput } from "@/components/ui/nepali-date-input"
-import { NarrationAutocomplete } from "@/components/accounting/narration-autocomplete"
 import { PartyAutocomplete } from "@/components/accounting/party-autocomplete"
 import { AccountPicker } from "@/components/accounting/account-picker"
 import { cn } from "@/lib/utils"
@@ -236,11 +235,10 @@ export function VoucherForm({ type, fiscalYearId, fiscalYearName, accounts, init
 
         <div>
           <label className="text-xs font-semibold text-slate-600 mb-1.5 block">Narration *</label>
-          <NarrationAutocomplete
+          <Input
             value={narration}
-            onChange={setNarration}
-            placeholder="Reason for this voucher — type to search prior narrations"
-            voucherType={type}
+            onChange={e => setNarration(e.target.value)}
+            placeholder="Reason for this voucher"
           />
         </div>
 

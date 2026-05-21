@@ -285,6 +285,9 @@ function SimpleTemplateForm({ template, presets, accounts, fiscalYearId, fiscalY
           input: buildWithdrawCash({ ...common, amount, cashAccountId: presets.cash, bankAccountId: presets.bank }),
           net: amount,
         }
+      default:
+        // day-fee-collection and salary-payroll route to their own form components above.
+        return { input: null, net: null }
     }
   }
 
