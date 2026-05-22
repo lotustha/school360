@@ -61,6 +61,8 @@ model School {
   auditLogs        AuditLog[]
   vendors          Vendor[]
   bankAccounts     BankAccount[]
+  feePayments      FeePayment[]
+  payrollRuns      PayrollRun[]
 
   @@map("schools")
 }
@@ -170,6 +172,7 @@ model Student {
   examSeats         ExamSeat[]
   examAttendances   ExamRoomAttendance[]
   subjectEnrollments SubjectEnrollment[]
+  feePayments       FeePayment[]
 
   @@unique([schoolId, admissionNo])
   @@map("students")
@@ -688,8 +691,9 @@ model Employee {
   updatedAt   DateTime @updatedAt
 
   user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  school  School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  payroll PayrollStructure?
+  school          School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  payroll         PayrollStructure?
+  payrollRunLines PayrollRunLine[]
 
   @@map("employees")
 }
@@ -719,7 +723,8 @@ model FeeStructure {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school      School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  feePayments FeePayment[]
 
   @@map("fee_structures")
 }
@@ -1291,6 +1296,7 @@ model Account {
   openingBalances OpeningBalance[]
   vendors         Vendor[]         @relation("VendorPayable")
   bankAccount     BankAccount?     @relation("BankAccountLink")
+  feePayments     FeePayment[]     @relation("FeeIncomeAccount")
 
   @@unique([schoolId, code])
   @@index([schoolId])
@@ -1334,6 +1340,8 @@ model Voucher {
   lines      JournalEntry[]
   reversalOf Voucher?       @relation("VoucherReversal", fields: [reversalOfId], references: [id])
   reversedBy Voucher?       @relation("VoucherReversal")
+  feePayment FeePayment?
+  payrollRun PayrollRun?
 
   @@unique([schoolId, number])
   @@index([schoolId, fiscalYearId, dateAD])
@@ -1355,12 +1363,19 @@ model JournalEntry {
   narration String?
   createdAt DateTime @default(now())
 
+  // Bank reconciliation — purely operational metadata, doesn't mutate the
+  // accounting record (debit/credit/account/voucher stay immutable). Set when
+  // the accountant marks a bank-book line as cleared in the bank statement.
+  clearedAt   DateTime?
+  clearedById String?
+
   school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   voucher Voucher @relation(fields: [voucherId], references: [id], onDelete: Cascade)
   account Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
 
   @@index([schoolId, accountId])
   @@index([voucherId])
+  @@index([accountId, clearedAt])
   @@map("journal_entries")
 }
 
@@ -1430,11 +1445,98 @@ model BankAccount {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  account Account @relation("BankAccountLink", fields: [accountId], references: [id], onDelete: Cascade)
+  school      School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  account     Account      @relation("BankAccountLink", fields: [accountId], references: [id], onDelete: Cascade)
+  feePayments FeePayment[]
+  payrollRuns PayrollRun[]
 
   @@index([schoolId])
   @@map("bank_accounts")
+}
+
+// ─── Fee Collection (auto-posts an RV to the GL) ────────────────────────────
+
+model FeePayment {
+  id              String   @id @default(cuid())
+  schoolId        String
+  receiptNumber   String   // FR-2082/83-0001 — per-school, per-FY counter
+  studentId       String
+  feeStructureId  String?  // optional reference to a fee template (price list)
+  feeAccountId    String   // GL income account credited (e.g. 4100 Tuition)
+  amount          Decimal  @db.Decimal(14, 2)
+  method          String   // CASH | BANK | CHEQUE | ONLINE
+  bankAccountId   String?  // FK to BankAccount when method != CASH
+  dateBS          String
+  dateAD          DateTime
+  remarks         String?
+  voucherId       String?  @unique // the auto-posted RV
+  collectedById   String?  // user who recorded the payment
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  school       School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student      Student       @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  feeStructure FeeStructure? @relation(fields: [feeStructureId], references: [id], onDelete: SetNull)
+  feeAccount   Account       @relation("FeeIncomeAccount", fields: [feeAccountId], references: [id], onDelete: Restrict)
+  bankAccount  BankAccount?  @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  voucher      Voucher?      @relation(fields: [voucherId], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, receiptNumber])
+  @@index([schoolId, dateAD])
+  @@index([schoolId, studentId])
+  @@map("fee_payments")
+}
+
+// ─── Payroll Runs (auto-posts a PV with TDS + SSF + net split) ─────────────
+
+model PayrollRun {
+  id            String   @id @default(cuid())
+  schoolId      String
+  runNumber     String   // "PR-2082/83-0001"
+  periodLabel   String   // "Baisakh 2082" (human-readable)
+  dateBS        String   // posting date BS
+  dateAD        DateTime
+  status        String   @default("DRAFT") // DRAFT | POSTED | REVERSED
+  totalGross    Decimal  @db.Decimal(14, 2)
+  totalTds      Decimal  @db.Decimal(14, 2)
+  totalSsf      Decimal  @db.Decimal(14, 2)
+  totalNet      Decimal  @db.Decimal(14, 2)
+  voucherId     String?  @unique // auto-posted PV
+  bankAccountId String?  // when method != CASH
+  paymentMethod String   @default("CASH") // CASH | BANK
+  notes         String?
+  createdById   String?
+  postedAt      DateTime?
+  postedById    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  school      School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  voucher     Voucher?         @relation(fields: [voucherId], references: [id], onDelete: SetNull)
+  bankAccount BankAccount?     @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  lines       PayrollRunLine[]
+
+  @@unique([schoolId, runNumber])
+  @@index([schoolId, dateAD])
+  @@map("payroll_runs")
+}
+
+model PayrollRunLine {
+  id         String   @id @default(cuid())
+  runId      String
+  employeeId String
+  gross      Decimal  @db.Decimal(14, 2)
+  tds        Decimal  @db.Decimal(14, 2) @default(0)
+  ssf        Decimal  @db.Decimal(14, 2) @default(0)
+  net        Decimal  @db.Decimal(14, 2)
+  remarks    String?
+
+  run      PayrollRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  employee Employee   @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@unique([runId, employeeId])
+  @@index([runId])
+  @@map("payroll_run_lines")
 }
 
 model AuditLog {

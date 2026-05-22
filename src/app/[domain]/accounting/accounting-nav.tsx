@@ -30,10 +30,12 @@ const groups: NavGroup[] = [
   {
     title: "Books", icon: BookOpen,
     items: [
-      { title: "Cash Book",          href: "/accounting/cash-book",   icon: Coins },
-      { title: "Bank Book",          href: "/accounting/bank-book",   icon: Landmark },
-      { title: "General Ledger",     href: "/accounting/ledger",      icon: BookOpen },
-      { title: "Subsidiary (Parties)", href: "/accounting/subsidiary", icon: Users },
+      { title: "Cash Book",              href: "/accounting/cash-book",            icon: Coins },
+      { title: "Bank Book",              href: "/accounting/bank-book",            icon: Landmark },
+      { title: "Cash + Bank Book",       href: "/accounting/combined-cash-book",   icon: ArrowLeftRight },
+      { title: "Bank Reconciliation",    href: "/accounting/bank-reconciliation",  icon: Scale },
+      { title: "General Ledger",         href: "/accounting/ledger",               icon: BookOpen },
+      { title: "Subsidiary (Parties)",   href: "/accounting/subsidiary",           icon: Users },
     ],
   },
   {

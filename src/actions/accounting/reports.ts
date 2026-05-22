@@ -469,6 +469,176 @@ export async function listBankAccounts() {
   })
 }
 
+// ─── Combined Cash + Bank double-column book ───────────────────────────────
+
+export interface CombinedBookRow {
+  dateBS:        string
+  voucherId:     string
+  voucherNumber: string | null
+  voucherType:   string
+  narration:     string
+  cashDr:        string
+  cashCr:        string
+  bankDr:        string
+  bankCr:        string
+  cashRunning:   string
+  bankRunning:   string
+}
+
+export interface CombinedCashBookResult {
+  fromBS:           string
+  toBS:             string
+  openingCash:      string
+  openingBank:      string
+  totalCashReceipts: string
+  totalCashPayments: string
+  totalBankReceipts: string
+  totalBankPayments: string
+  closingCash:      string
+  closingBank:      string
+  rows:             CombinedBookRow[]
+}
+
+export async function getCombinedCashBook(
+  fiscalYearId: string,
+  fromBS?: string,
+  toBS?:   string,
+): Promise<CombinedCashBookResult> {
+  const session = await requirePermission("finance:view")
+  const schoolId = session.user.schoolId!
+
+  const fy = await prisma.fiscalYear.findUnique({ where: { id: fiscalYearId } })
+  if (!fy || fy.schoolId !== schoolId) throw new Error("Fiscal year not found")
+
+  const fromAD = fromBS ? toAD(fromBS) : fy.startAD
+  const toADate = toBS ? toAD(toBS) : fy.endAD
+
+  // Identify cash & bank accounts
+  const cashBankAccounts = await prisma.account.findMany({
+    where:  { schoolId, subType: { in: ["CASH", "BANK"] }, isActive: true },
+    select: { id: true, subType: true },
+  })
+  const cashIds = cashBankAccounts.filter(a => a.subType === "CASH").map(a => a.id)
+  const bankIds = cashBankAccounts.filter(a => a.subType === "BANK").map(a => a.id)
+  const allIds = [...cashIds, ...bankIds]
+
+  if (allIds.length === 0) {
+    return {
+      fromBS: fromBS ?? fy.startBS, toBS: toBS ?? fy.endBS,
+      openingCash: "0.00", openingBank: "0.00",
+      totalCashReceipts: "0.00", totalCashPayments: "0.00",
+      totalBankReceipts: "0.00", totalBankPayments: "0.00",
+      closingCash: "0.00", closingBank: "0.00",
+      rows: [],
+    }
+  }
+
+  const [openings, priorActivity, periodLines] = await Promise.all([
+    prisma.openingBalance.findMany({ where: { schoolId, fiscalYearId, accountId: { in: allIds } } }),
+    // sum of pre-period activity per account
+    prisma.journalEntry.groupBy({
+      by: ["accountId"],
+      where: {
+        schoolId,
+        accountId: { in: allIds },
+        voucher:   { fiscalYearId, status: { in: ["POSTED", "REVERSED"] }, dateAD: { lt: fromAD } },
+      },
+      _sum: { debit: true, credit: true },
+    }),
+    prisma.journalEntry.findMany({
+      where: {
+        schoolId,
+        accountId: { in: allIds },
+        voucher: { fiscalYearId, status: { in: ["POSTED", "REVERSED"] }, dateAD: { gte: fromAD, lte: toADate } },
+      },
+      include: {
+        voucher: { select: { id: true, number: true, type: true, dateAD: true, dateBS: true, narration: true, createdAt: true } },
+        account: { select: { id: true, subType: true } },
+      },
+      orderBy: [{ voucher: { dateAD: "asc" } }, { voucher: { createdAt: "asc" } }, { lineNo: "asc" }],
+    }),
+  ])
+
+  // Opening balances (combined for cash & bank separately)
+  let openingCash = ZERO
+  let openingBank = ZERO
+  for (const o of openings) {
+    const isCash = cashIds.includes(o.accountId)
+    const delta = o.debit.minus(o.credit)
+    if (isCash) openingCash = openingCash.add(delta); else openingBank = openingBank.add(delta)
+  }
+  // Add prior activity to opening
+  for (const p of priorActivity) {
+    const isCash = cashIds.includes(p.accountId)
+    const delta = (p._sum.debit ?? ZERO).minus(p._sum.credit ?? ZERO)
+    if (isCash) openingCash = openingCash.add(delta); else openingBank = openingBank.add(delta)
+  }
+
+  // Group by voucher to produce one row per voucher
+  const byVoucher = new Map<string, {
+    voucher: typeof periodLines[number]["voucher"]
+    cashDr: Prisma.Decimal; cashCr: Prisma.Decimal
+    bankDr: Prisma.Decimal; bankCr: Prisma.Decimal
+  }>()
+  for (const l of periodLines) {
+    const isCash = l.account.subType === "CASH"
+    const cur = byVoucher.get(l.voucherId) ?? {
+      voucher: l.voucher, cashDr: ZERO, cashCr: ZERO, bankDr: ZERO, bankCr: ZERO,
+    }
+    if (isCash) { cur.cashDr = cur.cashDr.add(l.debit); cur.cashCr = cur.cashCr.add(l.credit) }
+    else        { cur.bankDr = cur.bankDr.add(l.debit); cur.bankCr = cur.bankCr.add(l.credit) }
+    byVoucher.set(l.voucherId, cur)
+  }
+
+  // Sort by voucher date
+  const sorted = [...byVoucher.values()].sort((a, b) => {
+    const t = a.voucher.dateAD.getTime() - b.voucher.dateAD.getTime()
+    if (t !== 0) return t
+    return a.voucher.createdAt.getTime() - b.voucher.createdAt.getTime()
+  })
+
+  let runningCash = openingCash
+  let runningBank = openingBank
+  let cashReceipts = ZERO, cashPayments = ZERO
+  let bankReceipts = ZERO, bankPayments = ZERO
+
+  const rows: CombinedBookRow[] = sorted.map(v => {
+    runningCash = runningCash.add(v.cashDr).minus(v.cashCr)
+    runningBank = runningBank.add(v.bankDr).minus(v.bankCr)
+    cashReceipts = cashReceipts.add(v.cashDr)
+    cashPayments = cashPayments.add(v.cashCr)
+    bankReceipts = bankReceipts.add(v.bankDr)
+    bankPayments = bankPayments.add(v.bankCr)
+    return {
+      dateBS:        v.voucher.dateBS,
+      voucherId:     v.voucher.id,
+      voucherNumber: v.voucher.number,
+      voucherType:   v.voucher.type,
+      narration:     v.voucher.narration,
+      cashDr:        v.cashDr.toFixed(2),
+      cashCr:        v.cashCr.toFixed(2),
+      bankDr:        v.bankDr.toFixed(2),
+      bankCr:        v.bankCr.toFixed(2),
+      cashRunning:   runningCash.toFixed(2),
+      bankRunning:   runningBank.toFixed(2),
+    }
+  })
+
+  return {
+    fromBS:           fromBS ?? fy.startBS,
+    toBS:             toBS ?? fy.endBS,
+    openingCash:      openingCash.toFixed(2),
+    openingBank:      openingBank.toFixed(2),
+    totalCashReceipts: cashReceipts.toFixed(2),
+    totalCashPayments: cashPayments.toFixed(2),
+    totalBankReceipts: bankReceipts.toFixed(2),
+    totalBankPayments: bankPayments.toFixed(2),
+    closingCash:      runningCash.toFixed(2),
+    closingBank:      runningBank.toFixed(2),
+    rows,
+  }
+}
+
 // ─── Income & Expenditure (NPO P&L) ────────────────────────────────────────
 
 export interface IELine { accountId: string; code: string; name: string; amount: string }

@@ -2,7 +2,8 @@
 
 import { useState, useTransition, useMemo } from "react"
 import { useRouter } from "next/navigation"
-import { Plus, Lock, Loader2, CheckCircle2, Sparkles } from "lucide-react"
+import Link from "next/link"
+import { Plus, Lock, Loader2, CheckCircle2, Sparkles, FileCheck } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -93,6 +94,13 @@ export function FiscalYearsClient({ years }: { years: FY[] }) {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="inline-flex gap-1">
+                      {fy.status === "OPEN" && (
+                        <Link href={`/accounting/year-end/${fy.id}`}>
+                          <Button size="sm" variant="ghost" className="cursor-pointer text-xs gap-1 text-primary">
+                            <FileCheck className="w-3 h-3" /> Year-End Close
+                          </Button>
+                        </Link>
+                      )}
                       {!fy.isCurrent && (
                         <Button size="sm" variant="ghost" disabled={pending} className="cursor-pointer text-xs gap-1" onClick={() => start(async () => {
                           await setCurrentFiscalYear(fy.id)

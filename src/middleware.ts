@@ -18,35 +18,33 @@ export default async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Define the root domain
+  // Root domain (derive www-prefixed alias from it so we don't hardcode any host)
   const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || "localhost:3000";
+  const rootHosts = new Set([
+    rootDomain,
+    `www.${rootDomain}`,
+    "localhost:3000",
+  ]);
 
-  // 2. DETECT IF THIS IS A SUBDOMAIN
-  // We check if the hostname is NOT the root domain, NOT a local IP, and contains a dot.
+  // 2. DETECT SUBDOMAIN — anything with a dot that isn't the root, www-root, or an IP literal.
   const isIP = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?::\d+)?$/.test(hostname);
-  
-  const isSubdomain = 
-    !isIP &&
-    hostname !== rootDomain && 
-    hostname !== "www.school360.com.np" &&
-    hostname !== "school360.com.np" &&
-    hostname !== "localhost:3000" &&
-    hostname.includes(".");
+  const isSubdomain = !isIP && !rootHosts.has(hostname) && hostname.includes(".");
 
   let response: NextResponse;
 
-  // 3. SUBDOMAIN ROUTING (The School App)
+  // 3. SUBDOMAIN ROUTING (the school app). Use nextUrl.clone() so Next.js treats
+  // the rewrite as a path-only rewrite — not a full-URL proxy. With new URL(..., req.url)
+  // Next 16 picks up the forwarded `https` scheme and tries to internally fetch
+  // https://localhost:3005/..., which fails with EPROTO when the upstream is plain HTTP.
   if (isSubdomain) {
     const subdomain = hostname.split(".")[0];
-    
-    // Prevent infinite loops
+
     if (url.pathname.startsWith(`/${subdomain}`)) {
       response = NextResponse.next();
     } else {
-      // Rewrite to the internal tenant folder
-      response = NextResponse.rewrite(
-        new URL(`/${subdomain}${url.pathname}${url.search}`, req.url)
-      );
+      const rewriteUrl = req.nextUrl.clone();
+      rewriteUrl.pathname = `/${subdomain}${url.pathname}`;
+      response = NextResponse.rewrite(rewriteUrl);
     }
   } else {
     // 4. MAIN DOMAIN ROUTING (Marketing Site)
