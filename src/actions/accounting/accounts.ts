@@ -63,6 +63,13 @@ export async function updateAccount(id: string, input: Partial<z.infer<typeof cr
   return updated
 }
 
+/** Reactivate a soft-disabled account. */
+export async function reactivateAccount(id: string) {
+  await requirePermission("finance:manage")
+  await prisma.account.update({ where: { id }, data: { isActive: true } })
+  revalidatePath("/accounting/accounts")
+}
+
 /** Soft-disable. Hard delete blocked if any JE exists. */
 export async function deactivateAccount(id: string) {
   await requirePermission("finance:manage")

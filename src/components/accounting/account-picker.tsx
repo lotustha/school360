@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { ChevronDown, Search, Check } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -35,8 +36,12 @@ const TYPE_BADGE: Record<string, string> = {
 
 /**
  * Searchable combobox over the Chart of Accounts. Type to filter by code,
- * name, or type. Keyboard-driven (↑/↓/Enter/Esc). Replaces plain <select>
- * everywhere we pick an account.
+ * name, or type. Keyboard-driven (↑/↓/Enter/Esc).
+ *
+ * The dropdown is portaled to document.body and positioned absolutely from
+ * the trigger's bounding rect. This ensures it always renders above every
+ * stacking context (backdrop-blur cards, modals, etc.) without needing any
+ * z-index gymnastics on the consuming page.
  */
 export function AccountPicker({
   value, onChange, accounts, placeholder = "Select account…",
@@ -45,8 +50,14 @@ export function AccountPicker({
   const [open, setOpen]           = useState(false)
   const [query, setQuery]         = useState("")
   const [highlight, setHighlight] = useState(0)
-  const wrapRef  = useRef<HTMLDivElement>(null)
-  const searchRef = useRef<HTMLInputElement>(null)
+  const [mounted, setMounted]     = useState(false)
+  const [pos, setPos]             = useState<{ top: number; left: number; width: number } | null>(null)
+  const triggerRef  = useRef<HTMLButtonElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const searchRef   = useRef<HTMLInputElement>(null)
+
+  // SSR-safe portal mount flag
+  useEffect(() => { setMounted(true) }, [])
 
   const list = useMemo(() => {
     const base = filter ? accounts.filter(filter) : accounts
@@ -61,20 +72,62 @@ export function AccountPicker({
 
   const selected = accounts.find(a => a.id === value)
 
-  // Focus search on open
+  // ─── Positioning ────────────────────────────────────────────────────────
+  // Uses viewport coordinates (no scrollY/scrollX) so it pairs with
+  // `position: fixed` in the portaled dropdown. This works correctly regardless
+  // of whether the scroll container is window, <main>, or anything else.
+  function updatePosition() {
+    const el = triggerRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setPos({
+      top:   r.bottom + 4,
+      left:  r.left,
+      width: r.width,
+    })
+  }
+
+  // Recompute when opening, and on window resize / any scroll container scroll
+  useEffect(() => {
+    if (!open) return
+    updatePosition()
+    const onReflow = () => updatePosition()
+    window.addEventListener("resize", onReflow)
+    // capture: true catches scrolls in any ancestor scroll container, not just window
+    window.addEventListener("scroll", onReflow, true)
+    return () => {
+      window.removeEventListener("resize", onReflow)
+      window.removeEventListener("scroll", onReflow, true)
+    }
+  }, [open])
+
+  // Focus search on open; reset state on close
   useEffect(() => {
     if (open) setTimeout(() => searchRef.current?.focus(), 10)
     else { setQuery(""); setHighlight(0) }
   }, [open])
 
-  // Close on outside click
+  // Close on outside click — need to check both trigger AND portaled dropdown
   useEffect(() => {
     if (!open) return
     function handler(e: MouseEvent) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (triggerRef.current?.contains(t))  return
+      if (dropdownRef.current?.contains(t)) return
+      setOpen(false)
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
+  }, [open])
+
+  // Close on Escape from anywhere when open
+  useEffect(() => {
+    if (!open) return
+    function onEsc(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false)
+    }
+    document.addEventListener("keydown", onEsc)
+    return () => document.removeEventListener("keydown", onEsc)
   }, [open])
 
   function pick(id: string) {
@@ -91,9 +144,64 @@ export function AccountPicker({
     } else if (e.key === "Escape") setOpen(false)
   }
 
+  const dropdownEl = open && mounted && pos ? (
+    <div
+      ref={dropdownRef}
+      style={{
+        position: "fixed",
+        top:      pos.top,
+        left:     pos.left,
+        width:    Math.max(pos.width, 280),
+        zIndex:   9999,
+      }}
+      className="bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden"
+    >
+      <div className="relative border-b border-slate-100">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+        <input
+          ref={searchRef}
+          type="text"
+          value={query}
+          onChange={e => { setQuery(e.target.value); setHighlight(0) }}
+          onKeyDown={handleKey}
+          placeholder="Search by code, name, or type…"
+          className="w-full pl-9 pr-3 py-2 text-sm outline-none"
+        />
+      </div>
+      <ul role="listbox" className="max-h-72 overflow-y-auto py-1">
+        {list.length === 0 ? (
+          <li className="px-3 py-4 text-center text-xs text-muted-foreground">No matches</li>
+        ) : list.map((a, i) => (
+          <li
+            key={a.id}
+            role="option"
+            aria-selected={a.id === value}
+            onMouseDown={e => { e.preventDefault(); pick(a.id) }}
+            onMouseEnter={() => setHighlight(i)}
+            className={cn(
+              "px-3 py-2 cursor-pointer flex items-center gap-2 text-sm",
+              highlight === i ? "bg-primary/10" : "hover:bg-slate-50",
+            )}
+          >
+            <span className="font-mono text-xs text-slate-500 flex-shrink-0 w-12">{a.code}</span>
+            <span className="flex-1 truncate">{a.name}</span>
+            <span className={cn("text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border", TYPE_BADGE[a.type] ?? "bg-slate-100 text-slate-600 border-slate-200")}>
+              {a.type.slice(0, 3)}
+            </span>
+            {a.id === value && <Check className="w-3.5 h-3.5 text-primary flex-shrink-0" />}
+          </li>
+        ))}
+      </ul>
+      <div className="px-3 py-1.5 text-[10px] text-slate-400 border-t border-slate-100 bg-slate-50/60">
+        ↑/↓ navigate · Enter to pick · Esc to close
+      </div>
+    </div>
+  ) : null
+
   return (
-    <div ref={wrapRef} className={cn("relative", className)}>
+    <div className={cn("relative", className)}>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => !disabled && setOpen(o => !o)}
@@ -118,49 +226,8 @@ export function AccountPicker({
         <ChevronDown className={cn("w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform", open && "rotate-180")} />
       </button>
 
-      {open && (
-        <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden min-w-[260px]">
-          <div className="relative border-b border-slate-100">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
-            <input
-              ref={searchRef}
-              type="text"
-              value={query}
-              onChange={e => { setQuery(e.target.value); setHighlight(0) }}
-              onKeyDown={handleKey}
-              placeholder="Search by code, name, or type…"
-              className="w-full pl-9 pr-3 py-2 text-sm outline-none"
-            />
-          </div>
-          <ul role="listbox" className="max-h-72 overflow-y-auto py-1">
-            {list.length === 0 ? (
-              <li className="px-3 py-4 text-center text-xs text-muted-foreground">No matches</li>
-            ) : list.map((a, i) => (
-              <li
-                key={a.id}
-                role="option"
-                aria-selected={a.id === value}
-                onMouseDown={e => { e.preventDefault(); pick(a.id) }}
-                onMouseEnter={() => setHighlight(i)}
-                className={cn(
-                  "px-3 py-2 cursor-pointer flex items-center gap-2 text-sm",
-                  highlight === i ? "bg-primary/10" : "hover:bg-slate-50",
-                )}
-              >
-                <span className="font-mono text-xs text-slate-500 flex-shrink-0 w-12">{a.code}</span>
-                <span className="flex-1 truncate">{a.name}</span>
-                <span className={cn("text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border", TYPE_BADGE[a.type] ?? "bg-slate-100 text-slate-600 border-slate-200")}>
-                  {a.type.slice(0, 3)}
-                </span>
-                {a.id === value && <Check className="w-3.5 h-3.5 text-primary flex-shrink-0" />}
-              </li>
-            ))}
-          </ul>
-          <div className="px-3 py-1.5 text-[10px] text-slate-400 border-t border-slate-100 bg-slate-50/60">
-            ↑/↓ navigate · Enter to pick · Esc to close
-          </div>
-        </div>
-      )}
+      {/* Portaled dropdown — escapes all stacking contexts */}
+      {dropdownEl && createPortal(dropdownEl, document.body)}
     </div>
   )
 }

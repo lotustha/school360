@@ -213,7 +213,7 @@ export function NepaliDateInput({
           placeholder={placeholder}
           maxLength={10}
           className={cn(
-            "w-full h-11 pl-[68px] pr-11",
+            "w-full h-11 pl-[56px] pr-9",
             "bg-white/75 backdrop-blur-md border border-slate-200/80 rounded-xl",
             "text-sm font-mono text-slate-800 placeholder:text-slate-400",
             "shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]",
@@ -223,12 +223,12 @@ export function NepaliDateInput({
         />
 
         {/* BS/AD toggle — sits inside the input on the left */}
-        <div className="absolute left-1.5 top-1/2 -translate-y-1/2 inline-flex h-7 rounded-md bg-slate-100/80 p-0.5 select-none">
+        <div className="absolute left-1 top-1/2 -translate-y-1/2 inline-flex h-7 rounded-md bg-slate-100/80 p-0.5 select-none">
           {(["BS", "AD"] as const).map(m => (
             <button key={m} type="button"
               onClick={() => switchMode(m)}
               className={cn(
-                "px-1.5 min-w-[26px] text-[10px] font-black uppercase tracking-wider cursor-pointer rounded transition-colors",
+                "px-1 min-w-[22px] text-[10px] font-black uppercase tracking-wider cursor-pointer rounded transition-colors",
                 mode === m
                   ? "bg-white text-primary shadow-sm"
                   : "text-slate-500 hover:text-slate-700",
@@ -242,7 +242,7 @@ export function NepaliDateInput({
             <button
               type="button"
               className={cn(
-                "absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-md",
+                "absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-md",
                 "flex items-center justify-center cursor-pointer",
                 "text-slate-400 hover:text-primary hover:bg-primary/8",
                 "transition-colors",
@@ -250,7 +250,7 @@ export function NepaliDateInput({
               )}
               aria-label="Open date picker"
             >
-              <Calendar className="w-4 h-4" />
+              <Calendar className="w-3.5 h-3.5" />
             </button>
           </PopoverTrigger>
 

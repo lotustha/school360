@@ -115,26 +115,37 @@ export function ReceiptPrintView({ school, receipt }: Props) {
           <table className="w-full text-sm border border-slate-400 mb-3">
             <thead>
               <tr className="bg-slate-100 border-b border-slate-400">
+                <th className="px-3 py-1.5 text-left text-[10px] uppercase tracking-wider font-bold w-12">#</th>
                 <th className="px-3 py-1.5 text-left text-[10px] uppercase tracking-wider font-bold">Particulars</th>
                 <th className="px-3 py-1.5 text-right text-[10px] uppercase tracking-wider font-bold w-28">Amount (Rs.)</th>
               </tr>
             </thead>
             <tbody>
-              <tr className="border-b border-slate-200">
-                <td className="px-3 py-2">
-                  <p>{receipt.feeAccountName}</p>
-                  {receipt.remarks && <p className="text-[11px] text-slate-500 mt-0.5">{receipt.remarks}</p>}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums font-bold">{receipt.amount}</td>
-              </tr>
+              {receipt.lines.map((line, i) => (
+                <tr key={i} className="border-b border-slate-200">
+                  <td className="px-3 py-2 text-slate-500 font-mono text-xs align-top">{i + 1}</td>
+                  <td className="px-3 py-2 align-top">
+                    <p>{line.feeAccountName}</p>
+                    {line.remarks && <p className="text-[11px] text-slate-500 mt-0.5">{line.remarks}</p>}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums font-bold align-top">{line.amount}</td>
+                </tr>
+              ))}
             </tbody>
             <tfoot>
               <tr className="bg-slate-100 border-t-2 border-slate-400 font-bold">
-                <td className="px-3 py-1.5 text-right">Total</td>
+                <td colSpan={2} className="px-3 py-1.5 text-right">Total</td>
                 <td className="px-3 py-1.5 text-right font-mono tabular-nums">{receipt.amount}</td>
               </tr>
             </tfoot>
           </table>
+
+          {receipt.remarks && (
+            <p className="text-[11px] text-slate-600 italic mb-3">
+              <strong className="not-italic text-slate-500">Note: </strong>
+              {receipt.remarks}
+            </p>
+          )}
 
           {/* In words */}
           <p className="text-xs mb-3 italic">

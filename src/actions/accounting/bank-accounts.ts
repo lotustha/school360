@@ -122,3 +122,15 @@ export async function deactivateBankAccount(id: string) {
   revalidatePath("/accounting/bank-accounts")
   revalidatePath("/accounting/accounts")
 }
+
+export async function reactivateBankAccount(id: string) {
+  await requirePermission("finance:manage")
+  const ba = await prisma.bankAccount.findUnique({ where: { id }, select: { accountId: true } })
+  if (!ba) throw new Error("Bank account not found")
+  await prisma.$transaction([
+    prisma.bankAccount.update({ where: { id }, data: { isActive: true } }),
+    prisma.account.update({ where: { id: ba.accountId }, data: { isActive: true } }),
+  ])
+  revalidatePath("/accounting/bank-accounts")
+  revalidatePath("/accounting/accounts")
+}

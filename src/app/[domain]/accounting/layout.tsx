@@ -2,7 +2,6 @@ import { Metadata } from "next"
 import { redirect } from "next/navigation"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/auth"
-import { AccountingNav } from "./accounting-nav"
 
 export const metadata: Metadata = {
   title: { default: "Accounting", template: "%s | Accounting | School360" },
@@ -20,9 +19,9 @@ export default async function AccountingLayout({
   if (!session?.user?.schoolId) {
     redirect(`/${domain}/login?next=/accounting`)
   }
+  // Tabs are rendered globally in HeaderTabs (sticky header). No in-page nav pill.
   return (
     <div className="max-w-7xl mx-auto space-y-5">
-      <AccountingNav />
       {children}
     </div>
   )

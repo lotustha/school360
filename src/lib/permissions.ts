@@ -15,10 +15,13 @@ export const SYSTEM_PERMISSIONS = [
   {
     module: "Finance & Accounts",
     permissions: [
-      { code: "finance:view",   label: "View Finances",   description: "View fee structures, vouchers, ledger, and reports." },
-      { code: "finance:manage", label: "Manage Finances", description: "Create/post vouchers, manage chart of accounts, close fiscal year." },
-      { code: "payroll:view",   label: "View Payroll",    description: "View employee payroll and salary sheets." },
-      { code: "payroll:manage", label: "Manage Payroll",  description: "Process payroll, TDS, and SSF calculations." },
+      { code: "finance:view",          label: "View Finances",     description: "View fee structures, vouchers, ledger, and reports." },
+      { code: "finance:manage",        label: "Manage Finances",   description: "Create/post vouchers, manage chart of accounts, close fiscal year." },
+      { code: "finance:billing",       label: "Manage Billing",    description: "Create plans, assign to students/groups, generate bills, edit overrides." },
+      { code: "finance:billing:view",  label: "View Billing",      description: "View student ledgers, bills, aging, and billing audit log." },
+      { code: "finance:approve",       label: "Approve Billing",   description: "Approve plan/schedule changes when the school requires approval." },
+      { code: "payroll:view",          label: "View Payroll",      description: "View employee payroll and salary sheets." },
+      { code: "payroll:manage",        label: "Manage Payroll",    description: "Process payroll, TDS, and SSF calculations." },
     ]
   },
   {

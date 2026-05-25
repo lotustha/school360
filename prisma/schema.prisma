@@ -25,6 +25,11 @@ model School {
   themeColor      String?  @default("#10b981")
   gradingSettings Json? // { type:"NEB_GPA"|"PERCENTAGE", passPercent:35, scale:[{grade,gpa,minPercent}] }
   workingDays     Int[]    @default([1, 2, 3, 4, 5]) // 0=Sun..6=Sat. Default Mon-Fri.
+
+  // Fee billing settings
+  requireBillingApproval Boolean @default(false) // when true, plan edits need finance:approve before bills regenerate
+  billingCarryForward    Boolean @default(true)  // show prior-FY unpaid bills in the current FY ledger
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -63,6 +68,18 @@ model School {
   bankAccounts     BankAccount[]
   feePayments      FeePayment[]
   payrollRuns      PayrollRun[]
+  assignments      Assignment[]
+  leaveRequests    LeaveRequest[]
+  notices          Notice[]
+  studyMaterials   StudyMaterial[]
+  lessonPlans      LessonPlan[]
+  conversations    Conversation[]
+  appNotifications AppNotification[]
+
+  // Fee billing
+  feeHeads               FeeHead[]
+  feePlans               FeePlan[]
+  studentFees            StudentFee[]
 
   @@map("schools")
 }
@@ -94,6 +111,13 @@ model User {
   invigilatorAssignments        ExamRoomInvigilator[]    @relation("InvigilatorTeacher")
   runningInvigilatorAssignments ExamRunningInvigilator[] @relation("RunningInvigilatorTeacher")
   examAttendancesMarked         ExamRoomAttendance[]     @relation("ExamAttendanceMarker")
+  assignmentsCreated            Assignment[]             @relation("TeacherAssignmentsCreated")
+  materialsUploaded             StudyMaterial[]          @relation("TeacherMaterialsUploaded")
+  leaveRequests                 LeaveRequest[]           @relation("UserLeaveRequests")
+  lessonPlans                   LessonPlan[]             @relation("TeacherLessonPlans")
+  sentMessages                  Message[]                @relation("SentMessages")
+  conversations                 ConversationParticipant[]
+  notifications                 AppNotification[]        @relation("UserNotifications")
 
   @@map("users")
 }
@@ -173,6 +197,10 @@ model Student {
   examAttendances   ExamRoomAttendance[]
   subjectEnrollments SubjectEnrollment[]
   feePayments       FeePayment[]
+  assignmentSubmissions AssignmentSubmission[]
+
+  // Fee billing
+  studentFees            StudentFee[]
 
   @@unique([schoolId, admissionNo])
   @@map("students")
@@ -308,6 +336,9 @@ model Class {
   examPaperTargets  ExamPaperTarget[]
   examClasses       ExamClass[]
   subjectGroups     SubjectGroup[]
+  assignments       Assignment[]
+  studyMaterials    StudyMaterial[]
+  lessonPlans       LessonPlan[]
 
   @@index([previousClassId])
   @@map("classes")
@@ -364,6 +395,9 @@ model Subject {
   examPaperTargets   ExamPaperTarget[]
   subjectGroupLink   SubjectGroupSubject?
   enrollments        SubjectEnrollment[]
+  assignments        Assignment[]
+  studyMaterials     StudyMaterial[]
+  lessonPlans        LessonPlan[]
 
   @@map("subjects")
 }
@@ -1268,6 +1302,8 @@ model FiscalYear {
   vouchers        Voucher[]
   openingBalances OpeningBalance[]
   voucherCounters VoucherCounter[]
+  feePlans        FeePlan[]
+  studentFees     StudentFee[]
 
   @@unique([schoolId, name])
   @@index([schoolId])
@@ -1297,6 +1333,8 @@ model Account {
   vendors         Vendor[]         @relation("VendorPayable")
   bankAccount     BankAccount?     @relation("BankAccountLink")
   feePayments     FeePayment[]     @relation("FeeIncomeAccount")
+  feePaymentLines FeePaymentLine[] @relation("FeeIncomeAccountLine")
+  feeHeads        FeeHead[]        @relation("FeeHeadAccount")
 
   @@unique([schoolId, code])
   @@index([schoolId])
@@ -1462,8 +1500,9 @@ model FeePayment {
   receiptNumber   String   // FR-2082/83-0001 — per-school, per-FY counter
   studentId       String
   feeStructureId  String?  // optional reference to a fee template (price list)
-  feeAccountId    String   // GL income account credited (e.g. 4100 Tuition)
-  amount          Decimal  @db.Decimal(14, 2)
+  /** @deprecated kept for legacy single-head rows; new rows use FeePaymentLine. */
+  feeAccountId    String?  // GL income account credited (e.g. 4100 Tuition)
+  amount          Decimal  @db.Decimal(14, 2)  // total across all lines
   method          String   // CASH | BANK | CHEQUE | ONLINE
   bankAccountId   String?  // FK to BankAccount when method != CASH
   dateBS          String
@@ -1474,17 +1513,35 @@ model FeePayment {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  school       School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  student      Student       @relation(fields: [studentId], references: [id], onDelete: Restrict)
-  feeStructure FeeStructure? @relation(fields: [feeStructureId], references: [id], onDelete: SetNull)
-  feeAccount   Account       @relation("FeeIncomeAccount", fields: [feeAccountId], references: [id], onDelete: Restrict)
-  bankAccount  BankAccount?  @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
-  voucher      Voucher?      @relation(fields: [voucherId], references: [id], onDelete: SetNull)
+  school       School                 @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student      Student                @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  feeStructure FeeStructure?          @relation(fields: [feeStructureId], references: [id], onDelete: SetNull)
+  feeAccount   Account?               @relation("FeeIncomeAccount", fields: [feeAccountId], references: [id], onDelete: Restrict)
+  bankAccount  BankAccount?           @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  voucher      Voucher?               @relation(fields: [voucherId], references: [id], onDelete: SetNull)
+  lines        FeePaymentLine[]
+  allocations  FeePaymentAllocation[]
 
   @@unique([schoolId, receiptNumber])
   @@index([schoolId, dateAD])
   @@index([schoolId, studentId])
   @@map("fee_payments")
+}
+
+model FeePaymentLine {
+  id            String   @id @default(cuid())
+  feePaymentId  String
+  feeAccountId  String
+  amount        Decimal  @db.Decimal(14, 2)
+  remarks       String?
+  lineNo        Int
+  createdAt     DateTime @default(now())
+
+  feePayment FeePayment @relation(fields: [feePaymentId], references: [id], onDelete: Cascade)
+  feeAccount Account    @relation("FeeIncomeAccountLine", fields: [feeAccountId], references: [id], onDelete: Restrict)
+
+  @@index([feePaymentId])
+  @@map("fee_payment_lines")
 }
 
 // ─── Payroll Runs (auto-posts a PV with TDS + SSF + net split) ─────────────
@@ -1555,4 +1612,331 @@ model AuditLog {
   @@index([schoolId, entity, entityId])
   @@index([schoolId, at])
   @@map("audit_logs")
+}
+
+// ==============================================================================
+// FEE BILLING — Student-Centric Model (rewrite 2026-05-24)
+// FeeHead + FeePlan + PlanItem + StudentFee + FeePaymentAllocation
+// StudentFee is the source of truth for "what does this student owe?"
+// Plans are one-shot templates that generate StudentFee rows.
+// All edits (scholarship, amount tweaks, status) happen on StudentFee directly.
+// ==============================================================================
+
+/// What kind of fee. Wraps an INCOME account with billing metadata
+/// (frequency, default amount, due day).
+model FeeHead {
+  id            String   @id @default(cuid())
+  schoolId      String
+  name          String   // "Tuition Fee", "Library Fee", "Admission Fee", "Canteen Fee"
+  feeAccountId  String   // → Account (must be INCOME type)
+  frequency     String   // MONTHLY | ANNUAL | ONE_TIME | EVENT
+  defaultAmount Decimal  @db.Decimal(14, 2)
+  /// For MONTHLY/ANNUAL: day of month (1-32). null for ONE_TIME/EVENT.
+  defaultDueDay Int?
+  /// Settle order for auto-allocation. Lower = higher priority (1 = highest).
+  /// Use to force critical fees (e.g. Exam Fee) to be paid before others
+  /// regardless of due date. Default 50.
+  priority      Int      @default(50)
+  isActive      Boolean  @default(true)
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  school      School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  feeAccount  Account      @relation("FeeHeadAccount", fields: [feeAccountId], references: [id], onDelete: Restrict)
+  planItems   PlanItem[]
+  studentFees StudentFee[]
+
+  @@unique([schoolId, name])
+  @@index([schoolId, isActive])
+  @@map("fee_heads")
+}
+
+/// One-shot template that GENERATES StudentFee rows when applied to a target.
+/// After applying, the plan is independent of the rows it created — edits happen
+/// on StudentFee directly. The plan is kept for re-applying to new students
+/// (e.g. mid-year transfer-in joining Class 10).
+model FeePlan {
+  id           String   @id @default(cuid())
+  schoolId     String
+  fiscalYearId String
+  name         String   // "Class 10 Standard FY 2082/83"
+  description  String?
+  isActive     Boolean  @default(true)
+  /// "BS" (Nepali) or "AD" (Gregorian). Controls period label names & due-date semantics.
+  calendarSystem String @default("BS")
+  /// Starting month (1-12) in the chosen calendar. BS: 1=Baisakh..12=Chaitra (4=Shrawan).
+  /// AD: 1=Jan..12=Dec. Lets a faculty pick "Baisakh-Chaitra" vs "Shrawan-Asar" academic year.
+  startMonth     Int    @default(4)
+  /// Starting year in the chosen calendar. BS: e.g. 2082. AD: e.g. 2025.
+  startYear      Int    @default(2082)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdById  String?
+
+  school      School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  fiscalYear  FiscalYear   @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  items       PlanItem[]
+  studentFees StudentFee[]
+
+  @@index([schoolId, fiscalYearId])
+  @@map("fee_plans")
+}
+
+model PlanItem {
+  id        String  @id @default(cuid())
+  feePlanId String
+  feeHeadId String
+  amount    Decimal @db.Decimal(14, 2)
+  /// Comma-separated periodIndex list. For MONTHLY heads:
+  ///   "1,2,3,4,5,6,7,8,9,10,11,12" = all 12 months (default),
+  ///   "1,3,5" = selected months.
+  /// For ANNUAL/ONE_TIME/EVENT heads: "0".
+  periods   String  @default("1,2,3,4,5,6,7,8,9,10,11,12")
+  dueDay    Int     @default(10)
+  notes     String?
+
+  feePlan FeePlan @relation(fields: [feePlanId], references: [id], onDelete: Cascade)
+  feeHead FeeHead @relation(fields: [feeHeadId], references: [id], onDelete: Restrict)
+
+  @@index([feePlanId])
+  @@map("plan_items")
+}
+
+/// THE source of truth for "what does this student owe?"
+/// One row per (student × fee head × period). Generated from a Plan or created
+/// ad-hoc per-student. All scholarship/amount/status edits happen here.
+model StudentFee {
+  id                String   @id @default(cuid())
+  schoolId          String
+  studentId         String
+  fiscalYearId      String
+  feeHeadId         String
+
+  /// 1-12 for MONTHLY; 0 for ANNUAL/ONE_TIME/EVENT.
+  periodIndex       Int
+  /// Human label snapshot at creation: "Baisakh 2082", "Annual 2082", "Admission Fee 2082"
+  periodLabel       String
+
+  /// Charge before scholarship.
+  baseAmount        Decimal  @db.Decimal(14, 2)
+  /// 0-100. 0 = full charge, 100 = full waiver.
+  scholarshipPct    Decimal  @default(0) @db.Decimal(5, 2)
+  /// Free-text: "Topper merit", "Sibling discount", "Staff child", "Need-based", etc.
+  scholarshipReason String?
+  /// Stored = baseAmount × (1 - scholarshipPct/100). Server computes; never trust client.
+  finalAmount       Decimal  @db.Decimal(14, 2)
+
+  dueDateBS         String
+  dueDateAD         DateTime
+  /// PLANNED → BILLED (notice generated) → PARTIAL/PAID/CANCELLED
+  status            String   @default("PLANNED")
+  paidAmount        Decimal  @default(0) @db.Decimal(14, 2)
+
+  notes             String?
+  /// Optional link back to the plan that generated this row.
+  sourcePlanId      String?
+  /// Voucher number assigned when the row was BILLED (BL-FYNAME-NNNN).
+  billVoucherNumber String?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  cancelledAt       DateTime?
+  cancelledReason   String?
+
+  school      School     @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student     Student    @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  fiscalYear  FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  feeHead     FeeHead    @relation(fields: [feeHeadId], references: [id], onDelete: Restrict)
+  sourcePlan  FeePlan?   @relation(fields: [sourcePlanId], references: [id], onDelete: SetNull)
+  allocations FeePaymentAllocation[]
+
+  /// Idempotency: at most one row per (student, FY, head, period). Re-applying a
+  /// plan won't create duplicates — use createMany with skipDuplicates.
+  @@unique([studentId, fiscalYearId, feeHeadId, periodIndex])
+  @@index([schoolId, status])
+  @@index([studentId, status])
+  @@index([fiscalYearId, periodIndex])
+  @@index([dueDateAD, status])
+  @@map("student_fees")
+}
+
+/// Many-to-many between a payment and the StudentFee rows it settles.
+/// Sum of allocations on a payment may be less than the payment total
+/// (residual = advance credit on the student's account).
+model FeePaymentAllocation {
+  id           String   @id @default(cuid())
+  feePaymentId String
+  studentFeeId String
+  amount       Decimal  @db.Decimal(14, 2)
+  createdAt    DateTime @default(now())
+
+  feePayment FeePayment @relation(fields: [feePaymentId], references: [id], onDelete: Cascade)
+  studentFee StudentFee @relation(fields: [studentFeeId], references: [id], onDelete: Restrict)
+
+  @@unique([feePaymentId, studentFeeId])
+  @@index([studentFeeId])
+  @@map("fee_payment_allocations")
+}
+
+// --- Teacher Modules Extensions ---
+
+model Assignment {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  dueDate     DateTime
+  schoolId    String
+  classId     String
+  subjectId   String
+  teacherId   String
+  createdAt   DateTime @default(now())
+
+  school      School   @relation(fields: [schoolId], references: [id])
+  class       Class    @relation(fields: [classId], references: [id])
+  subject     Subject  @relation(fields: [subjectId], references: [id])
+  teacher     User     @relation("TeacherAssignmentsCreated", fields: [teacherId], references: [id])
+
+  submissions AssignmentSubmission[]
+
+  @@map("assignments")
+}
+
+model AssignmentSubmission {
+  id           String   @id @default(cuid())
+  assignmentId String
+  studentId    String
+  submittedAt  DateTime @default(now())
+  grade        String?
+  feedback     String?
+
+  assignment   Assignment @relation(fields: [assignmentId], references: [id])
+  student      Student    @relation(fields: [studentId], references: [id])
+
+  @@map("assignment_submissions")
+}
+
+model LeaveRequest {
+  id          String   @id @default(cuid())
+  userId      String
+  schoolId    String
+  startDate   DateTime
+  endDate     DateTime
+  reason      String
+  status      String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  createdAt   DateTime @default(now())
+
+  user        User     @relation("UserLeaveRequests", fields: [userId], references: [id])
+  school      School   @relation(fields: [schoolId], references: [id])
+
+  @@map("leave_requests")
+}
+
+model Notice {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  schoolId    String
+  targetRole  String?  // e.g., "TEACHER", "STUDENT", "ALL"
+  createdAt   DateTime @default(now())
+
+  school      School   @relation(fields: [schoolId], references: [id])
+
+  @@map("notices")
+}
+
+model StudyMaterial {
+  id          String   @id @default(cuid())
+  title       String
+  fileUrl     String
+  schoolId    String
+  classId     String
+  subjectId   String
+  teacherId   String
+  createdAt   DateTime @default(now())
+
+  school      School   @relation(fields: [schoolId], references: [id])
+  class       Class    @relation(fields: [classId], references: [id])
+  subject     Subject  @relation(fields: [subjectId], references: [id])
+  teacher     User     @relation("TeacherMaterialsUploaded", fields: [teacherId], references: [id])
+
+  @@map("study_materials")
+}
+
+model LessonPlan {
+  id          String   @id @default(cuid())
+  date        DateTime
+  topic       String
+  status      String   @default("Planned") // Planned, Draft, Completed
+  schoolId    String
+  classId     String
+  subjectId   String
+  teacherId   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  class       Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subject     Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacher     User     @relation("TeacherLessonPlans", fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@map("lesson_plans")
+}
+
+model Conversation {
+  id          String   @id @default(cuid())
+  schoolId    String
+  title       String?  // Optional for direct messages
+  isGroup     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  school       School                    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String
+  userId         String
+  unreadCount    Int          @default(0)
+  joinedAt       DateTime     @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  senderId       String
+  content        String
+  createdAt      DateTime     @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User         @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+model AppNotification {
+  id          String   @id @default(cuid())
+  schoolId    String
+  userId      String
+  title       String
+  body        String
+  isRead      Boolean  @default(false)
+  type        String   @default("GENERAL") // LEAVE, ASSIGNMENT, MEETING, GENERAL
+  createdAt   DateTime @default(now())
+
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  user        User     @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("app_notifications")
 }
