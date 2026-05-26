@@ -12,6 +12,8 @@ import { getIncomeExpenditure } from "@/actions/accounting/reports"
 import { listFiscalYears, getCurrentFiscalYear } from "@/actions/accounting/fiscal-years"
 import { formatBS, todayBS } from "@/lib/nepali-date"
 import { ReportExportButton } from "@/components/accounting/report-export-button"
+import { ReportDateField } from "@/components/accounting/report-date-field"
+import { FyBadge } from "@/components/accounting/fy-badge"
 import { ReportKpi } from "@/components/accounting/report-shell"
 
 export const metadata: Metadata = { title: "Income & Expenditure" }
@@ -58,11 +60,7 @@ export default async function IncomeExpenditurePage({
         <div>
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <h1 className="text-2xl font-bold tracking-tight">Income &amp; Expenditure</h1>
-            {activeFy && (
-              <Badge variant="outline" className="text-[10px] font-black uppercase tracking-widest bg-slate-100 text-slate-600 border-slate-200">
-                FY {activeFy.name}
-              </Badge>
-            )}
+            {activeFy && <FyBadge fyName={activeFy.name} status={activeFy.status} />}
             <Badge variant="outline" className={cn(
               "text-[10px] font-bold uppercase tracking-widest",
               surplus === 0 ? "bg-slate-100 text-slate-600 border-slate-200"
@@ -100,13 +98,7 @@ export default async function IncomeExpenditurePage({
         </div>
         <div>
           <label className="text-[10px] uppercase tracking-widest font-black text-slate-500 mb-1.5 block">As of (BS)</label>
-          <input
-            name="asOf"
-            type="text"
-            defaultValue={sp.asOf ?? ""}
-            placeholder={activeFy?.endBS}
-            className="w-full h-11 px-3 bg-white/75 border border-slate-200 rounded-lg text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/15 font-mono"
-          />
+          <ReportDateField name="asOf" defaultValue={sp.asOf ?? ""} placeholder={activeFy?.endBS} />
         </div>
         <Button type="submit" className="h-11 cursor-pointer">Apply</Button>
       </form>
@@ -237,8 +229,15 @@ function Row({
       <span className="min-w-0 flex-1 truncate">
         {item.code && <span className="font-mono text-xs text-slate-400 mr-2">{item.code}</span>}
         {item.accountId ? (
-          <Link href={`/accounting/ledger?account=${item.accountId}&fy=${fyId}`} className="hover:text-primary hover:underline">
+          <Link
+            href={`/accounting/ledger?account=${item.accountId}&fy=${fyId}`}
+            className="hover:text-primary hover:underline inline-flex items-center gap-1 group"
+            title="Drill down to the ledger — see every JE line and click through to the source voucher"
+          >
             {item.name}
+            <svg className="w-3 h-3 text-slate-300 group-hover:text-primary transition-colors flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M7 7h10v10"/><path d="M7 17 17 7"/>
+            </svg>
           </Link>
         ) : item.name}
       </span>

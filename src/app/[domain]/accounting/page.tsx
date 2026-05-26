@@ -4,7 +4,7 @@ import { notFound } from "next/navigation"
 import {
   ArrowRight, AlertCircle, Zap, CheckCircle2, XCircle, AlertTriangle,
   TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, Activity,
-  ReceiptText, Banknote, ArrowLeftRight, NotebookPen, Scale,
+  ReceiptText, Banknote, ArrowLeftRight, NotebookPen, Scale, FileSpreadsheet,
 } from "lucide-react"
 import { prisma } from "@/lib/prisma"
 import { Button } from "@/components/ui/button"
@@ -17,7 +17,7 @@ import { VOUCHER_TYPE_LABEL } from "@/lib/accounting"
 export const metadata: Metadata = { title: "Overview" }
 
 const TYPE_ICON: Record<string, React.ElementType> = {
-  RV: ReceiptText, PV: Banknote, CV: ArrowLeftRight, JV: NotebookPen,
+  RV: ReceiptText, PV: Banknote, CV: ArrowLeftRight, JV: NotebookPen, BL: FileSpreadsheet,
 }
 
 const TYPE_COLOR: Record<string, { bg: string; text: string; ring: string }> = {
@@ -25,6 +25,7 @@ const TYPE_COLOR: Record<string, { bg: string; text: string; ring: string }> = {
   PV: { bg: "bg-rose-50",     text: "text-rose-600",     ring: "ring-rose-200" },
   CV: { bg: "bg-sky-50",      text: "text-sky-600",      ring: "ring-sky-200" },
   JV: { bg: "bg-violet-50",   text: "text-violet-600",   ring: "ring-violet-200" },
+  BL: { bg: "bg-amber-50",    text: "text-amber-600",    ring: "ring-amber-200" },
 }
 
 export default async function AccountingHomePage({
@@ -46,7 +47,7 @@ export default async function AccountingHomePage({
   const totalDrafts   = voucherCounts.filter(v => v.status === "DRAFT").reduce((a, v) => a + v.count, 0)
   const totalReversed = voucherCounts.filter(v => v.status === "REVERSED").reduce((a, v) => a + v.count, 0)
 
-  const byType = ["RV", "PV", "CV", "JV"].map(t => ({
+  const byType = ["RV", "PV", "CV", "JV", "BL"].map(t => ({
     type: t,
     count: voucherCounts.filter(v => v.type === t).reduce((a, v) => a + v.count, 0),
   }))

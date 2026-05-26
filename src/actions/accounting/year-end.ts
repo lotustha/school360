@@ -48,6 +48,10 @@ export interface YearEndPreview {
   rollForwardTotalDr: string
   rollForwardTotalCr: string
 
+  /** Outstanding Accounts Receivable from unpaid StudentFee rows in THIS FY. */
+  arOutstanding:      string
+  arUnpaidRowCount:   number
+
   /** The next FY (if it exists). */
   nextFiscalYearId:   string | null
   nextFiscalYearName: string | null
@@ -184,6 +188,16 @@ export async function previewYearEndClose(fiscalYearId: string): Promise<YearEnd
     }
   }
 
+  // AR outstanding from the StudentFee data side. We use this as a warning,
+  // not a hard gate — the AR balance carries forward as a balance-sheet
+  // account regardless, but the school should know it's there before closing.
+  const arAgg = await prisma.studentFee.aggregate({
+    where: { schoolId, fiscalYearId: fy.id, status: { in: ["BILLED", "PARTIAL", "PLANNED"] } },
+    _sum:  { finalAmount: true, paidAmount: true },
+    _count: true,
+  })
+  const arOutstanding = (arAgg._sum.finalAmount ?? ZERO).minus(arAgg._sum.paidAmount ?? ZERO)
+
   return {
     fiscalYearId:    fy.id,
     fiscalYearName:  fy.name,
@@ -196,6 +210,8 @@ export async function previewYearEndClose(fiscalYearId: string): Promise<YearEnd
     rollForward,
     rollForwardTotalDr: rfDr.toFixed(2),
     rollForwardTotalCr: rfCr.toFixed(2),
+    arOutstanding:      arOutstanding.lessThan(0) ? "0.00" : arOutstanding.toFixed(2),
+    arUnpaidRowCount:   arAgg._count,
     nextFiscalYearId:   nextFy?.id ?? null,
     nextFiscalYearName: nextFy?.name ?? null,
     capitalFundAccountId: surplusAcc?.id ?? null,

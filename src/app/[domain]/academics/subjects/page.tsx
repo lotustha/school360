@@ -8,8 +8,9 @@ import { SubjectsToolbar } from "./subjects-toolbar"
 import { SubjectsTable, type SubjectRow } from "./subjects-table"
 import { SubjectsPagination } from "./subjects-pagination"
 import { getSubjectYearStatuses, getSubjectYearConfigs } from "@/actions/academics"
-import { BookOpen, Info } from "lucide-react"
+import { BookOpen, Info, GraduationCap, UserCheck, AlertCircle } from "lucide-react"
 import Link from "next/link"
+import { cn } from "@/lib/utils"
 import { sortClassesByFacultyThenName } from "@/lib/class-sort"
 
 export const metadata: Metadata = { title: "Subjects" }
@@ -121,8 +122,14 @@ export default async function SubjectsPage({ params, searchParams }: PageProps) 
     }),
   }
 
-  const [totalCount, subjects, classes, faculties, academicYears, teachers] = await Promise.all([
+  const [totalCount, withoutTeacherCount, distinctClassesWithSubjects, subjects, classes, faculties, academicYears, teachers] = await Promise.all([
     prisma.subject.count({ where }),
+    prisma.subject.count({ where: { ...where, teachers: { none: {} } } }),
+    prisma.subject.findMany({
+      where,
+      select: { classId: true },
+      distinct: ["classId"],
+    }).then(rows => rows.length),
     prisma.subject.findMany({
       where,
       include: {
@@ -224,18 +231,22 @@ export default async function SubjectsPage({ params, searchParams }: PageProps) 
     })),
   )
 
+  const withTeacherCount = totalCount - withoutTeacherCount
+  const hasFilter = !!q || facultyIds.length > 0 || classIds.length > 0 || academicYearIds.length > 0
+
   return (
-    <div className="space-y-4 max-w-[1400px] mx-auto">
+    <div className="space-y-5 max-w-[1400px] mx-auto">
       <SubjectsSubNav />
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
-            <BookOpen className="w-5 h-5 text-amber-600" />
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold">Subjects</h2>
-            <p className="text-sm text-muted-foreground">Browse, search and manage your school&apos;s subjects</p>
-          </div>
+
+      {/* Header */}
+      <div className="flex items-end justify-between flex-wrap gap-2">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Subjects</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            School-wide subject catalog. Search, filter by stream / class / session,
+            and assign teachers. Each subject belongs to exactly one class.
+            {hasFilter && <span className="text-primary font-bold"> · filtered</span>}
+          </p>
         </div>
         <SubjectDrawer
           schoolId={school.id}
@@ -246,15 +257,38 @@ export default async function SubjectsPage({ params, searchParams }: PageProps) 
         />
       </div>
 
+      {/* KPI strip */}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <Kpi label={hasFilter ? "Subjects (filtered)" : "Total subjects"} value={totalCount}                  sub="In current scope"          tone="amber"  icon={BookOpen} />
+        <Kpi label="Classes covered"   value={distinctClassesWithSubjects}                                   sub={classes.length > 0 ? `of ${classes.length} class${classes.length === 1 ? "" : "es"}` : "Add classes first"} tone="primary" icon={GraduationCap} />
+        <Kpi label="With teachers"     value={withTeacherCount}                                              sub={totalCount > 0 ? `${Math.round((withTeacherCount / totalCount) * 100)}% staffed` : "No subjects yet"}     tone="emerald" icon={UserCheck} />
+        <Kpi label="No teacher yet"    value={withoutTeacherCount}                                           sub={withoutTeacherCount > 0 ? "Won't show in gradebook" : "All staffed"}                                       tone={withoutTeacherCount > 0 ? "rose" : "slate"} icon={AlertCircle} />
+      </div>
+
+      {/* Class-missing setup callout */}
       {classes.length === 0 && (
-        <div className="bg-blue-50/80 backdrop-blur-sm border border-blue-200/60 rounded-xl p-4">
-          <div className="flex gap-2.5">
-            <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-blue-700 leading-relaxed">
-              <strong>No classes found.</strong> Create classes before adding subjects.{" "}
-              <Link href="/academics/classes" className="underline font-semibold hover:text-blue-900 transition-colors">
-                Go to Classes →
-              </Link>
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4 flex items-start gap-3">
+          <Info className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-amber-900">
+            <strong>No classes found.</strong> Create classes before adding subjects.{" "}
+            <Link href="/academics/classes" className="underline font-bold hover:text-amber-950">
+              Go to Classes →
+            </Link>
+          </p>
+        </div>
+      )}
+
+      {/* Unstaffed subjects callout */}
+      {totalCount > 0 && withoutTeacherCount > 0 && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50/60 p-4 flex items-start gap-3">
+          <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-rose-900">
+              {withoutTeacherCount} subject{withoutTeacherCount === 1 ? "" : "s"} ha{withoutTeacherCount === 1 ? "s" : "ve"} no teacher assigned
+            </p>
+            <p className="text-xs text-rose-800 mt-0.5 leading-relaxed">
+              Unstaffed subjects don&apos;t appear in routine, gradebook, or marks entry.
+              Open a subject row and pick a teacher to make it usable.
             </p>
           </div>
         </div>
@@ -284,6 +318,34 @@ export default async function SubjectsPage({ params, searchParams }: PageProps) 
       />
 
       <SubjectsPagination page={page} pageSize={PAGE_SIZE} totalCount={totalCount} />
+    </div>
+  )
+}
+
+function Kpi({
+  label, value, sub, tone, icon: Icon,
+}: {
+  label: string; value: number; sub: string
+  tone: "amber" | "primary" | "emerald" | "rose" | "slate"
+  icon: React.ElementType
+}) {
+  const palette = {
+    amber:   { ring: "ring-amber-100",   icon: "text-amber-700 bg-amber-50",     value: "text-amber-700" },
+    primary: { ring: "ring-primary/10",  icon: "text-primary bg-primary/8",      value: "text-primary" },
+    emerald: { ring: "ring-emerald-100", icon: "text-emerald-600 bg-emerald-50", value: "text-emerald-700" },
+    rose:    { ring: "ring-rose-100",    icon: "text-rose-600 bg-rose-50",       value: "text-rose-700" },
+    slate:   { ring: "ring-slate-100",   icon: "text-slate-500 bg-slate-50",     value: "text-slate-700" },
+  }[tone]
+  return (
+    <div className={cn("bg-white/70 backdrop-blur-xl rounded-xl border border-white/40 shadow-sm p-4 ring-1", palette.ring)}>
+      <div className="flex items-start justify-between mb-1">
+        <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">{label}</p>
+        <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center", palette.icon)}>
+          <Icon className="w-3.5 h-3.5" />
+        </div>
+      </div>
+      <p className={cn("text-xl font-bold font-mono tabular-nums leading-tight", palette.value)}>{value}</p>
+      <p className="text-[10px] text-slate-500 mt-0.5 truncate" title={sub}>{sub}</p>
     </div>
   )
 }

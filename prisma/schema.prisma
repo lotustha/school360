@@ -1380,6 +1380,7 @@ model Voucher {
   reversedBy Voucher?       @relation("VoucherReversal")
   feePayment FeePayment?
   payrollRun PayrollRun?
+  billedFees StudentFee[] @relation("StudentFeeBillVoucher")
 
   @@unique([schoolId, number])
   @@index([schoolId, fiscalYearId, dateAD])
@@ -1738,6 +1739,9 @@ model StudentFee {
   sourcePlanId      String?
   /// Voucher number assigned when the row was BILLED (BL-FYNAME-NNNN).
   billVoucherNumber String?
+  /// FK to the BL Voucher posted at billing time (DR AR / CR Income).
+  /// Null on rows billed before accrual mode was enabled.
+  billVoucherId     String?
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -1749,6 +1753,7 @@ model StudentFee {
   fiscalYear  FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
   feeHead     FeeHead    @relation(fields: [feeHeadId], references: [id], onDelete: Restrict)
   sourcePlan  FeePlan?   @relation(fields: [sourcePlanId], references: [id], onDelete: SetNull)
+  billVoucher Voucher?   @relation("StudentFeeBillVoucher", fields: [billVoucherId], references: [id], onDelete: SetNull)
   allocations FeePaymentAllocation[]
 
   /// Idempotency: at most one row per (student, FY, head, period). Re-applying a

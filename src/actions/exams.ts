@@ -37,6 +37,215 @@ export async function listExams(schoolId: string) {
   })
 }
 
+// Listing variant that adds per-exam progress metrics in a single batched pass.
+// Used by the redesigned /academics/exams listing for status pills, progress bars
+// and the timeline view. Computed in JS off batched fetches to avoid N+1.
+export interface ExamProgressRow {
+  examId:           string
+  paperCount:       number
+  scheduledCount:   number
+  seatsAssigned:    number
+  roomsSeated:      number  // distinct scheduleRooms that have ≥1 seat assigned
+  invigilatorRooms: number
+  invigilatorTotal: number  // also doubles as denominator for roomsSeated
+  attendanceMarked: number
+  attendanceTotal:  number
+  firstDateBS:      string | null
+  lastDateBS:       string | null
+}
+
+export async function listExamsWithProgress(schoolId: string) {
+  const exams = await prisma.exam.findMany({
+    where:   { schoolId },
+    include: {
+      academicYear: { select: { id: true, name: true, facultyId: true } },
+      faculty:      { select: { id: true, name: true } },
+      _count:       { select: { papers: true, classes: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  })
+  if (exams.length === 0) return { exams, progress: new Map<string, ExamProgressRow>() }
+
+  const examIds = exams.map(e => e.id)
+
+  const [papers, seatsByExam, scheduleRooms, attendanceByExam] = await Promise.all([
+    prisma.examPaper.findMany({
+      where:  { schoolId, examId: { in: examIds } },
+      select: {
+        id:        true,
+        examId:    true,
+        schedules: { select: { dateBS: true }, orderBy: { dateAD: "asc" } },
+      },
+    }),
+    prisma.examSeat.findMany({
+      where:  { paper: { schoolId, examId: { in: examIds } } },
+      select: { paperId: true, scheduleId: true, roomId: true },
+    }),
+    prisma.examScheduleRoom.findMany({
+      where:  { schedule: { paper: { schoolId, examId: { in: examIds } } } },
+      select: {
+        roomId:   true,
+        schedule: { select: { paper: { select: { examId: true } }, invigilators: { select: { roomId: true } } } },
+      },
+    }),
+    prisma.examRoomAttendance.groupBy({
+      by: ["paperId"],
+      where: { paper: { schoolId, examId: { in: examIds } } },
+      _count: { _all: true },
+    }),
+  ])
+
+  // Build paperId → examId map for the groupBy results
+  const paperToExam = new Map(papers.map(p => [p.id, p.examId]))
+
+  const progress = new Map<string, ExamProgressRow>()
+  for (const e of exams) {
+    progress.set(e.id, {
+      examId:           e.id,
+      paperCount:       0,
+      scheduledCount:   0,
+      seatsAssigned:    0,
+      roomsSeated:      0,
+      invigilatorRooms: 0,
+      invigilatorTotal: 0,
+      attendanceMarked: 0,
+      attendanceTotal:  0,
+      firstDateBS:      null,
+      lastDateBS:       null,
+    })
+  }
+
+  // Per exam, track distinct (scheduleId, roomId) cells with at least one seat.
+  const seatedCells = new Map<string, Set<string>>()
+
+  for (const p of papers) {
+    const row = progress.get(p.examId)
+    if (!row) continue
+    row.paperCount++
+    if (p.schedules.length > 0) {
+      row.scheduledCount++
+      for (const s of p.schedules) {
+        if (!row.firstDateBS || s.dateBS < row.firstDateBS) row.firstDateBS = s.dateBS
+        if (!row.lastDateBS  || s.dateBS > row.lastDateBS)  row.lastDateBS  = s.dateBS
+      }
+    }
+  }
+
+  for (const seat of seatsByExam) {
+    const examId = paperToExam.get(seat.paperId)
+    if (!examId) continue
+    const row = progress.get(examId)
+    if (!row) continue
+    row.seatsAssigned++
+    let cells = seatedCells.get(examId)
+    if (!cells) { cells = new Set<string>(); seatedCells.set(examId, cells) }
+    cells.add(`${seat.scheduleId}|${seat.roomId}`)
+  }
+  for (const [examId, cells] of seatedCells) {
+    const row = progress.get(examId)
+    if (row) row.roomsSeated = cells.size
+  }
+
+  for (const sr of scheduleRooms) {
+    const examId = sr.schedule.paper.examId
+    const row = progress.get(examId)
+    if (!row) continue
+    row.invigilatorTotal++
+    if (sr.schedule.invigilators.some(i => i.roomId === sr.roomId)) row.invigilatorRooms++
+  }
+
+  for (const a of attendanceByExam) {
+    const examId = paperToExam.get(a.paperId)
+    if (!examId) continue
+    const row = progress.get(examId)
+    if (row) row.attendanceMarked += a._count._all
+  }
+
+  // attendanceTotal == seatsAssigned (one mark per seated student)
+  for (const row of progress.values()) row.attendanceTotal = row.seatsAssigned
+
+  return { exams, progress }
+}
+
+// Clone a terminal's papers, classes, and (per-paper) targets into a new
+// terminal under the chosen session. Schedules, seats, invigilators, and
+// attendance are NOT carried over — those are session-specific work.
+export async function cloneExam(input: {
+  schoolId:       string
+  sourceExamId:   string
+  newName:        string
+  academicYearId: string
+}): Promise<{ id: string }> {
+  const src = await prisma.exam.findFirst({
+    where:  { id: input.sourceExamId, schoolId: input.schoolId },
+    include: {
+      classes: { select: { classId: true } },
+      papers:  {
+        include: { targets: { select: { classId: true, subjectId: true } } },
+      },
+    },
+  })
+  if (!src) throw new Error("Source terminal not found")
+
+  const ay = await prisma.academicYear.findFirst({
+    where:  { id: input.academicYearId, schoolId: input.schoolId },
+    select: { id: true, facultyId: true },
+  })
+  if (!ay) throw new Error("Target session not found")
+  if (ay.facultyId !== src.facultyId) {
+    throw new Error("Target session faculty doesn't match source terminal faculty")
+  }
+
+  const created = await prisma.$transaction(async (tx) => {
+    const exam = await tx.exam.create({
+      data: {
+        schoolId:       input.schoolId,
+        name:           input.newName,
+        academicYearId: input.academicYearId,
+        facultyId:      src.facultyId,
+      },
+    })
+    if (src.classes.length > 0) {
+      await tx.examClass.createMany({
+        data: src.classes.map(c => ({ examId: exam.id, classId: c.classId })),
+      })
+    }
+    for (const p of src.papers) {
+      await tx.examPaper.create({
+        data: {
+          schoolId:    input.schoolId,
+          examId:      exam.id,
+          subjectName: p.subjectName,
+          code:        p.code,
+          fullMarks:   p.fullMarks,
+          passMarks:   p.passMarks,
+          durationMin: p.durationMin,
+          targets:     { createMany: { data: p.targets.map(t => ({ classId: t.classId, subjectId: t.subjectId })) } },
+        },
+      })
+    }
+    return exam
+  })
+  revalidatePath("/academics/exams")
+  revalidatePath("/academics/evaluations")
+  return { id: created.id }
+}
+
+// Bulk delete — used by the multi-select toolbar on the listing page.
+export async function bulkDeleteExams(schoolId: string, ids: string[]): Promise<{ deleted: number }> {
+  if (ids.length === 0) return { deleted: 0 }
+  const owned = await prisma.exam.findMany({
+    where:  { id: { in: ids }, schoolId },
+    select: { id: true },
+  })
+  if (owned.length === 0) return { deleted: 0 }
+  const ownedIds = owned.map(o => o.id)
+  const res = await prisma.exam.deleteMany({ where: { id: { in: ownedIds } } })
+  revalidatePath("/academics/exams")
+  revalidatePath("/academics/evaluations")
+  return { deleted: res.count }
+}
+
 export async function createExam(data: {
   schoolId:       string
   name:           string

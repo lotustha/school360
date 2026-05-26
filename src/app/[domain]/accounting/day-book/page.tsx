@@ -14,20 +14,22 @@ import { getCurrentFiscalYear, listFiscalYears } from "@/actions/accounting/fisc
 import { todayBS, formatBS, toAD, toBS } from "@/lib/nepali-date"
 import { DayBookFilter } from "./day-book-filter"
 import { DayBookClient } from "./day-book-client"
+import { DayBookExportButtons } from "./day-book-export"
 
 export const metadata: Metadata = { title: "Day Book" }
 
 const TYPE_ICON: Record<string, React.ElementType> = {
-  RV: ReceiptText, PV: Banknote, CV: ArrowLeftRight, JV: NotebookPen,
+  RV: ReceiptText, PV: Banknote, CV: ArrowLeftRight, JV: NotebookPen, BL: FileSpreadsheet,
 }
 const TYPE_TONE: Record<string, string> = {
   RV: "bg-emerald-50 text-emerald-700 border-emerald-200",
   PV: "bg-rose-50    text-rose-700    border-rose-200",
   CV: "bg-sky-50     text-sky-700     border-sky-200",
   JV: "bg-violet-50  text-violet-700  border-violet-200",
+  BL: "bg-amber-50   text-amber-700   border-amber-200",
 }
 const TYPE_LABEL: Record<string, string> = {
-  RV: "Receipt", PV: "Payment", CV: "Contra", JV: "Journal",
+  RV: "Receipt", PV: "Payment", CV: "Contra", JV: "Journal", BL: "Bill",
 }
 
 function shiftDayBS(bsStr: string, deltaDays: number): string {
@@ -61,7 +63,7 @@ export default async function DayBookPage({
   const balanced = Math.abs(totalDr - totalCr) < 0.005
   const reversedCount = entries.filter(e => e.status === "REVERSED").length
 
-  const byType = ["RV", "PV", "CV", "JV"].map(t => {
+  const byType = ["RV", "PV", "CV", "JV", "BL"].map(t => {
     const items = entries.filter(e => e.voucherType === t)
     const total = items.reduce((a, e) => a + (parseFloat(e.totalDebit) || 0), 0)
     return { type: t, count: items.length, total }
@@ -103,12 +105,7 @@ export default async function DayBookPage({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" disabled className="cursor-not-allowed gap-1.5 text-xs opacity-50" title="Coming in Phase 3">
-            <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
-          </Button>
-          <Button size="sm" variant="outline" disabled className="cursor-not-allowed gap-1.5 text-xs opacity-50" title="Print view coming soon">
-            <Printer className="w-3.5 h-3.5" /> Print
-          </Button>
+          <DayBookExportButtons entries={entries} dateBS={dateBS} />
         </div>
       </div>
 
@@ -174,7 +171,7 @@ export default async function DayBookPage({
       {entries.length > 0 && (
         <div className="bg-white/70 backdrop-blur-xl rounded-2xl border border-white/40 shadow-sm p-5">
           <p className="text-[10px] uppercase tracking-widest font-black text-slate-500 mb-3">Voucher Mix</p>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             {byType.map(t => {
               const Icon = TYPE_ICON[t.type] ?? ReceiptText
               const tone = TYPE_TONE[t.type] ?? TYPE_TONE.JV

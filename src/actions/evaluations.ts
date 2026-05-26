@@ -20,22 +20,21 @@ export async function listEvaluations(args: {
 }) {
   // Faculty filter applies via the joined classes (EvaluationClass → Class.facultyId).
   // If faculty is set, only evaluations covering at least one class in that faculty match.
-  const facultyClassFilter =
-    args.facultyId === undefined ? undefined
-    : args.facultyId === null     ? { facultyId: null }
-    :                                { facultyId: args.facultyId }
+  // Combine class + faculty conditions in one `some` clause so the second spread
+  // doesn't overwrite the first (both want to set `evaluationClasses`).
+  const someClause: Record<string, unknown> = {}
+  if (args.classId) someClause.classId = args.classId
+  if (args.facultyId !== undefined) {
+    someClause.class = args.facultyId === null ? { facultyId: null } : { facultyId: args.facultyId }
+  }
+  const hasSome = Object.keys(someClause).length > 0
 
   return prisma.evaluation.findMany({
     where: {
       schoolId: args.schoolId,
       ...(args.academicYearId   && { academicYearId: args.academicYearId }),
       ...(args.academicYearName && { academicYear: { name: args.academicYearName } }),
-      ...(args.classId && { evaluationClasses: { some: { classId: args.classId } } }),
-      ...(facultyClassFilter && {
-        evaluationClasses: {
-          some: { class: facultyClassFilter },
-        },
-      }),
+      ...(hasSome && { evaluationClasses: { some: someClause } }),
     },
     include: {
       academicYear: { select: { id: true, name: true, isCurrent: true } },
@@ -91,6 +90,8 @@ export async function createEvaluation(data: {
   autoSeedSubjects?:  boolean    // create SubjectEvaluations for every subject in every selected class
   /** Optional preset key to seed components per the band's recipe. Empty seed when omitted. */
   bandKey?:           BandKey
+  /** Optional publish timestamp (ISO). When set, the evaluation is created already-published. */
+  publishAt?:         string | null
 }) {
   if (!data.classIds || data.classIds.length === 0) {
     throw new Error("At least one class must be selected")
@@ -118,6 +119,47 @@ export async function createEvaluation(data: {
       })
     : []
 
+  // Auto-create plan: when a DERIVED_FROM_EXAM component can't find a matching
+  // terminal in this year, mint a placeholder Exam inside the same transaction
+  // and link the component to it. Saves the teacher a trip to /academics/exams
+  // just to create empty Term-1 / Term-2 / Final shells before grading works.
+  type HintKey = "first" | "second" | "final" | "__self__"
+  const hintNameMap: Record<HintKey, string> = {
+    first:    "First Terminal Examination",
+    second:   "Second Terminal Examination",
+    final:    "Final Examination",
+    __self__: data.name,
+  }
+
+  // Bucket the recipe by hint and pre-resolve which buckets already match an existing exam.
+  const hintBuckets = new Map<HintKey, { matchedExamId: string | null }>()
+  if (needsExams && recipe) {
+    for (const c of recipe.components) {
+      if (c.source !== "DERIVED_FROM_EXAM") continue
+      const key: HintKey = c.examMatchHint ?? "__self__"
+      if (hintBuckets.has(key)) continue
+      const match = findExamByHint(c.examMatchHint, data.name, exams)
+      hintBuckets.set(key, { matchedExamId: match?.id ?? null })
+    }
+  }
+
+  // Academic-year scope: the new Exam must match the year's faculty. Same for
+  // its assigned classes (Exam → faculty must equal selected classes' faculty,
+  // or null for General).
+  const ayForAuto = (needsExams && [...hintBuckets.values()].some(b => !b.matchedExamId))
+    ? await prisma.academicYear.findFirst({
+        where:  { id: data.academicYearId, schoolId: data.schoolId },
+        select: { id: true, facultyId: true },
+      })
+    : null
+  const autoClasses = (ayForAuto && data.classIds.length > 0)
+    ? await prisma.class.findMany({
+        where:  { id: { in: data.classIds }, schoolId: data.schoolId, facultyId: ayForAuto.facultyId },
+        select: { id: true },
+      })
+    : []
+  const autoClassIds = autoClasses.map(c => c.id)
+
   const ev = await prisma.$transaction(async tx => {
     const created = await tx.evaluation.create({
       data: {
@@ -127,12 +169,34 @@ export async function createEvaluation(data: {
         sequenceNumber: data.sequenceNumber,
         description:    data.description ?? null,
         isFinal,
+        publishAt:      data.publishAt ? new Date(data.publishAt) : null,
       },
     })
 
     await tx.evaluationClass.createMany({
       data: data.classIds.map(classId => ({ evaluationId: created.id, classId })),
     })
+
+    // Mint missing exams now so component seeding has ids to link to.
+    if (needsExams && ayForAuto) {
+      for (const [key, bucket] of hintBuckets) {
+        if (bucket.matchedExamId) continue
+        const newExam = await tx.exam.create({
+          data: {
+            schoolId:       data.schoolId,
+            academicYearId: data.academicYearId,
+            facultyId:      ayForAuto.facultyId,
+            name:           hintNameMap[key],
+          },
+        })
+        if (autoClassIds.length > 0) {
+          await tx.examClass.createMany({
+            data: autoClassIds.map(classId => ({ examId: newExam.id, classId })),
+          })
+        }
+        bucket.matchedExamId = newExam.id
+      }
+    }
 
     if (data.autoSeedSubjects && subjects.length > 0) {
       if (recipe) {
@@ -146,8 +210,8 @@ export async function createEvaluation(data: {
               externalMax:  recipe.externalMax,
               components: {
                 create: recipe.components.map((c, i) => {
-                  const link = c.source === "DERIVED_FROM_EXAM"
-                    ? findExamByHint(c.examMatchHint, data.name, exams)
+                  const linkedId = c.source === "DERIVED_FROM_EXAM"
+                    ? hintBuckets.get(c.examMatchHint ?? "__self__")?.matchedExamId ?? null
                     : null
                   return {
                     part:           c.part,
@@ -155,7 +219,7 @@ export async function createEvaluation(data: {
                     maxMarks:       c.maxMarks,
                     orderIndex:     i,
                     source:         c.source,
-                    sourceExamId:   link?.id ?? null,
+                    sourceExamId:   linkedId,
                     sourceMaxMarks: c.source === "DERIVED_FROM_EXAM" ? (c.sourceMaxMarks ?? 100) : null,
                   }
                 }),
@@ -180,6 +244,8 @@ export async function createEvaluation(data: {
   })
 
   revalidatePath("/academics/evaluations")
+  // If we may have auto-created Exams during seeding, refresh the exams listing too.
+  if (needsExams) revalidatePath("/academics/exams")
   return ev
 }
 
@@ -231,6 +297,116 @@ export async function updateEvaluation(id: string, data: {
 export async function deleteEvaluation(id: string) {
   await prisma.evaluation.delete({ where: { id } })
   revalidatePath("/academics/evaluations")
+}
+
+// Clone an evaluation's schema (class set + SubjectEvaluations + components)
+// into a new evaluation. Results / publishAt / isLocked are NOT carried over —
+// the clone is a fresh draft you can reuse for the next sequence.
+export async function cloneEvaluation(input: {
+  schoolId:         string
+  sourceId:         string
+  newName:          string
+  newSequenceNumber: number
+  academicYearId?:  string  // defaults to source's year
+  isFinal?:         boolean // defaults to source.isFinal
+}): Promise<{ id: string }> {
+  const src = await prisma.evaluation.findFirst({
+    where: { id: input.sourceId, schoolId: input.schoolId },
+    include: {
+      evaluationClasses: { select: { classId: true } },
+      subjectEvaluations: {
+        include: { components: true },
+      },
+    },
+  })
+  if (!src) throw new Error("Source evaluation not found")
+
+  const ay = await prisma.academicYear.findFirst({
+    where:  { id: input.academicYearId ?? src.academicYearId, schoolId: input.schoolId },
+    select: { id: true },
+  })
+  if (!ay) throw new Error("Target session not found")
+
+  const created = await prisma.$transaction(async tx => {
+    const ev = await tx.evaluation.create({
+      data: {
+        schoolId:       input.schoolId,
+        academicYearId: ay.id,
+        name:           input.newName,
+        sequenceNumber: input.newSequenceNumber,
+        description:    src.description,
+        isFinal:        input.isFinal ?? src.isFinal,
+      },
+    })
+    if (src.evaluationClasses.length > 0) {
+      await tx.evaluationClass.createMany({
+        data: src.evaluationClasses.map(c => ({ evaluationId: ev.id, classId: c.classId })),
+      })
+    }
+    for (const se of src.subjectEvaluations) {
+      await tx.subjectEvaluation.create({
+        data: {
+          evaluationId: ev.id,
+          subjectId:    se.subjectId,
+          internalMax:  se.internalMax,
+          externalMax:  se.externalMax,
+          orderIndex:   se.orderIndex,
+          components: {
+            create: se.components.map(c => ({
+              part:           c.part,
+              label:          c.label,
+              maxMarks:       c.maxMarks,
+              orderIndex:     c.orderIndex,
+              source:         c.source,
+              sourceExamId:   c.sourceExamId,
+              sourceMaxMarks: c.sourceMaxMarks,
+            })),
+          },
+        },
+      })
+    }
+    return ev
+  })
+  revalidatePath("/academics/evaluations")
+  return { id: created.id }
+}
+
+// Bulk publish/unpublish/lock/unlock. publishAt:"now" stamps Date.now();
+// publishAt:"clear" sets null. Same shape for isLocked.
+export async function bulkUpdateEvaluations(input: {
+  schoolId:  string
+  ids:       string[]
+  publishAt?: "now" | "clear"
+  isLocked?:  boolean
+}): Promise<{ updated: number }> {
+  if (input.ids.length === 0) return { updated: 0 }
+  const owned = await prisma.evaluation.findMany({
+    where:  { id: { in: input.ids }, schoolId: input.schoolId },
+    select: { id: true },
+  })
+  if (owned.length === 0) return { updated: 0 }
+  const ids = owned.map(o => o.id)
+  const data: Record<string, unknown> = {}
+  if (input.publishAt === "now")   data.publishAt = new Date()
+  if (input.publishAt === "clear") data.publishAt = null
+  if (input.isLocked !== undefined) data.isLocked = input.isLocked
+  if (Object.keys(data).length === 0) return { updated: 0 }
+  const res = await prisma.evaluation.updateMany({ where: { id: { in: ids } }, data })
+  revalidatePath("/academics/evaluations")
+  return { updated: res.count }
+}
+
+export async function bulkDeleteEvaluations(schoolId: string, ids: string[]): Promise<{ deleted: number }> {
+  if (ids.length === 0) return { deleted: 0 }
+  const owned = await prisma.evaluation.findMany({
+    where:  { id: { in: ids }, schoolId },
+    select: { id: true },
+  })
+  if (owned.length === 0) return { deleted: 0 }
+  const ownedIds = owned.map(o => o.id)
+  const res = await prisma.evaluation.deleteMany({ where: { id: { in: ownedIds } } })
+  revalidatePath("/academics/evaluations")
+  return { deleted: res.count }
 }
 
 // ─── SubjectEvaluation ──────────────────────────────────────────────────────

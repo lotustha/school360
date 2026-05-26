@@ -42,9 +42,10 @@ interface Props {
 const STATUS_TONE: Record<string, string> = {
   PLANNED:   "bg-slate-100 text-slate-600 border-slate-200",
   BILLED:    "bg-amber-50  text-amber-700 border-amber-200",
+  OVERDUE:   "bg-rose-50   text-rose-700  border-rose-200",
   PARTIAL:   "bg-sky-50    text-sky-700   border-sky-200",
   PAID:      "bg-emerald-50 text-emerald-700 border-emerald-200",
-  CANCELLED: "bg-rose-50   text-rose-700  border-rose-200",
+  CANCELLED: "bg-slate-50  text-slate-400  border-slate-200 line-through",
 }
 
 export function ClassGridClient({
@@ -202,8 +203,11 @@ export function ClassGridClient({
                       const paid  = list.reduce((sum, r) => sum + parseFloat(r.paidAmount),  0)
                       rowTotal += final
                       const allPaid = list.every(r => r.status === "PAID")
-                      const anyOverdue = list.some(r => r.isOverdue)
-                      const tone = allPaid ? "PAID" : anyOverdue ? "BILLED" : list[0].status
+                      const anyOverdue = list.some(r => r.isOverdue && r.status !== "PAID")
+                      // Label = actual status by default; "OVERDUE" only when past due AND unpaid.
+                      // Tone (color) tracks the label.
+                      const label = allPaid ? "PAID" : anyOverdue ? "OVERDUE" : list[0].status
+                      const tone  = label
                       const anySelected = list.some(r => selected.has(r.id))
                       return (
                         <td key={h.id} className="px-1.5 py-1.5 align-top">
@@ -236,7 +240,7 @@ export function ClassGridClient({
                               {list.length > 1 && <span className="text-[9px] font-bold text-slate-500 bg-white/60 px-1 rounded">{list.length}×</span>}
                             </div>
                             <div className="flex items-center justify-between gap-1 mt-0.5">
-                              <span className="text-[9px] uppercase tracking-widest font-black text-slate-500">{tone}</span>
+                              <span className="text-[9px] uppercase tracking-widest font-black text-slate-500">{label}</span>
                               {paid > 0 && paid < final && <span className="text-[9px] font-mono text-emerald-700">{paid.toFixed(0)}</span>}
                             </div>
                           </button>

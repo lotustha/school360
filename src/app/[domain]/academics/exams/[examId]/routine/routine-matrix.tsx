@@ -28,6 +28,7 @@ import {
 } from "@/actions/exams"
 import { createSubject } from "@/actions/academics"
 import { PaperDrawer, type PaperClassOpt } from "./paper-drawer"
+import { ExamQuickAssignPopover, type ExamQuickAssignTarget } from "./quick-assign-popover"
 
 interface Props {
   schoolId:        string
@@ -240,6 +241,9 @@ export function RoutineMatrix({ schoolId, examId, initialPapers, initialHolidays
 
   // ─── Double-click edit popover ──────────────────────────────────────
   const [editingTimePaper, setEditingTimePaper] = useState<PaperRow | null>(null)
+
+  // ─── Cell-level quick-assign popover (double-click empty cell) ───────
+  const [quickTarget, setQuickTarget] = useState<ExamQuickAssignTarget | null>(null)
 
   // ─── Add-subject quick popover ───────────────────────────────────────
   const [adding, setAdding] = useState(false)
@@ -466,6 +470,10 @@ export function RoutineMatrix({ schoolId, examId, initialPapers, initialHolidays
                     isHoliday={!!holiday}
                     isClassSelected={c.id === selectedClassId}
                     onCellClick={() => setSelectedClassId(c.id)}
+                    onCellDoubleClick={() => {
+                      setSelectedClassId(c.id)
+                      setQuickTarget({ classId: c.id, className: c.name, dateBS: d.bs })
+                    }}
                     onEdit={setEditingPaper}
                     onDelete={handleDelete}
                     onClear={clearSchedule}
@@ -537,6 +545,20 @@ export function RoutineMatrix({ schoolId, examId, initialPapers, initialHolidays
           onSaved={() => { setAdding(false); router.refresh() }}
         />
       )}
+
+      {/* Cell quick-assign popover (double-click a cell to open) */}
+      {quickTarget && (
+        <ExamQuickAssignPopover
+          schoolId={schoolId}
+          examId={examId}
+          target={quickTarget}
+          classes={classes}
+          placedPapers={placedByCell.get(`${quickTarget.classId}:${quickTarget.dateBS}`) ?? []}
+          defaultStart={defaultStart}
+          defaultDuration={defaultDuration}
+          onClose={() => setQuickTarget(null)}
+        />
+      )}
     </DndContext>
   )
 }
@@ -580,21 +602,22 @@ function buildDayAxis(startBS: string, span: number): AxisDay[] {
 
 function CellDroppable({
   classId, dateBS, papers, isWeekend, isToday, isHoliday,
-  isClassSelected, onCellClick,
+  isClassSelected, onCellClick, onCellDoubleClick,
   onEdit, onDelete, onClear, onDoubleClick,
 }: {
-  classId:          string
-  dateBS:           string
-  papers:           PaperRow[]
-  isWeekend:        boolean
-  isToday:          boolean
-  isHoliday?:       boolean
-  isClassSelected?: boolean
-  onCellClick?:     () => void
-  onEdit:           (p: PaperRow) => void
-  onDelete:         (p: PaperRow) => void
-  onClear:          (p: PaperRow) => void
-  onDoubleClick:    (p: PaperRow) => void
+  classId:            string
+  dateBS:             string
+  papers:             PaperRow[]
+  isWeekend:          boolean
+  isToday:            boolean
+  isHoliday?:         boolean
+  isClassSelected?:   boolean
+  onCellClick?:       () => void
+  onCellDoubleClick?: () => void
+  onEdit:             (p: PaperRow) => void
+  onDelete:           (p: PaperRow) => void
+  onClear:            (p: PaperRow) => void
+  onDoubleClick:      (p: PaperRow) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `cell:${classId}:${dateBS}` })
   const isEmpty = papers.length === 0
@@ -602,16 +625,17 @@ function CellDroppable({
     <div
       ref={setNodeRef}
       onClick={isEmpty ? onCellClick : undefined}
+      onDoubleClick={() => onCellDoubleClick?.()}
       className={cn(
         "group relative border-r last:border-r-0 border-slate-100 p-1 min-h-[60px] transition-colors",
-        isEmpty && "cursor-pointer",
+        (isEmpty || onCellDoubleClick) && "cursor-pointer",
         isHoliday && "bg-rose-50/40",
         !isHoliday && isWeekend && "bg-slate-50/40",
         !isHoliday && isToday && "bg-amber-50/30",
         isOver && "bg-primary/10",
         isEmpty && !isOver && "hover:bg-primary/5",
       )}
-      title={isEmpty ? "Click to load this class's subjects, then drag a subject here" : undefined}
+      title={isEmpty ? "Click to load subjects · Double-click to quick-assign a paper" : "Double-click empty area to add another paper"}
     >
       <div className="space-y-1">
         {papers.map(p => (
@@ -632,7 +656,7 @@ function CellDroppable({
             ? "text-primary/40 opacity-0 group-hover:opacity-100"
             : "text-slate-300 opacity-0 group-hover:opacity-100",
         )}>
-          {isClassSelected ? "Drop subject" : "Click to pick"}
+          {isClassSelected ? "Drop · or dbl-click" : "Click · or dbl-click"}
         </span>
       )}
     </div>
@@ -660,7 +684,7 @@ function PlacedBlock({
         "hover:shadow-sm hover:border-violet-300",
         isDragging && "opacity-30",
       )}
-      onDoubleClick={() => onDoubleClick(paper)}
+      onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick(paper) }}
     >
       <div className="flex items-start gap-1">
         <div {...attributes} {...listeners} className="flex-1 min-w-0 cursor-grab active:cursor-grabbing">

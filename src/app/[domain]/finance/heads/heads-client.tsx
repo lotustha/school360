@@ -85,44 +85,75 @@ export function HeadsClient({ initialHeads, incomeAccounts }: Props) {
         <div className="bg-white/70 backdrop-blur-xl rounded-2xl border border-white/40 shadow-sm p-12 text-center">
           <Tag className="w-12 h-12 mx-auto text-slate-300 mb-3" />
           <p className="text-sm text-slate-600">No fee heads match.</p>
+          <p className="text-xs text-slate-400 mt-1">Try clearing filters or click <strong>New Head</strong> to add one.</p>
         </div>
       ) : (
         <div className="bg-white/70 backdrop-blur-xl rounded-2xl border border-white/40 shadow-sm overflow-hidden">
-          <table className="w-full text-xs">
-            <thead className="bg-slate-50/80 border-b border-slate-200">
-              <tr>
-                <th className="text-left px-3 py-2 font-black uppercase tracking-widest text-[10px] text-slate-500">Head</th>
-                <th className="text-left px-3 py-2 font-black uppercase tracking-widest text-[10px] text-slate-500">Income Account</th>
-                <th className="text-left px-3 py-2 font-black uppercase tracking-widest text-[10px] text-slate-500">Frequency</th>
-                <th className="text-right px-3 py-2 font-black uppercase tracking-widest text-[10px] text-slate-500">Default</th>
-                <th className="text-right px-3 py-2 font-black uppercase tracking-widest text-[10px] text-slate-500">Usage</th>
-                <th className="text-right px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map(h => (
-                <tr key={h.id} className={cn("hover:bg-slate-50/40", !h.isActive && "opacity-50")}>
-                  <td className="px-3 py-2 font-bold text-slate-700">{h.name}</td>
-                  <td className="px-3 py-2"><span className="font-mono text-[10px] text-slate-500">{h.feeAccountCode}</span> · {h.feeAccountName}</td>
-                  <td className="px-3 py-2">
-                    <span className="text-[10px] uppercase tracking-widest font-black text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">{h.frequency}</span>
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums">{h.defaultAmount}{h.defaultDueDay && <span className="text-slate-400"> · {h.defaultDueDay}</span>}</td>
-                  <td className="px-3 py-2 text-right text-slate-500">{h.usageCount}</td>
-                  <td className="px-3 py-2 text-right">
-                    <div className="inline-flex items-center gap-1">
-                      <button onClick={() => setEditing(h)} className="w-7 h-7 rounded-md inline-flex items-center justify-center text-slate-400 hover:text-primary hover:bg-primary/8 cursor-pointer" aria-label="Edit">
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
-                      <button onClick={() => handleToggle(h.id)} disabled={pending} className="w-7 h-7 rounded-md inline-flex items-center justify-center text-slate-400 hover:text-amber-700 hover:bg-amber-50 cursor-pointer" aria-label={h.isActive ? "Deactivate" : "Activate"}>
-                        {h.isActive ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50/80 border-b border-slate-200">
+                <tr>
+                  <th className="text-left px-3 py-2.5 font-black uppercase tracking-widest text-[10px] text-slate-500">Head</th>
+                  <th className="text-left px-3 py-2.5 font-black uppercase tracking-widest text-[10px] text-slate-500">Income Account</th>
+                  <th className="text-left px-3 py-2.5 font-black uppercase tracking-widest text-[10px] text-slate-500">Frequency</th>
+                  <th className="text-center px-3 py-2.5 font-black uppercase tracking-widest text-[10px] text-slate-500" title="Lower = paid first when auto-allocating">Priority</th>
+                  <th className="text-right px-3 py-2.5 font-black uppercase tracking-widest text-[10px] text-slate-500">Default</th>
+                  <th className="text-right px-3 py-2.5 font-black uppercase tracking-widest text-[10px] text-slate-500">Used</th>
+                  <th className="text-right px-3 py-2.5"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map(h => (
+                  <tr key={h.id} className={cn("hover:bg-slate-50/60 transition-colors", !h.isActive && "opacity-50")}>
+                    <td className="px-3 py-2.5">
+                      <div className="font-bold text-slate-800">{h.name}</div>
+                      {h.notes && <div className="text-[10px] text-slate-400 truncate max-w-[260px]">{h.notes}</div>}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="font-mono text-[10px] text-slate-500">{h.feeAccountCode}</span>
+                      <span className="ml-1.5 text-slate-600">{h.feeAccountName}</span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className={cn(
+                        "text-[10px] uppercase tracking-widest font-black px-1.5 py-0.5 rounded",
+                        h.frequency === "MONTHLY"  && "bg-primary/8 text-primary",
+                        h.frequency === "ANNUAL"   && "bg-sky-50 text-sky-700",
+                        h.frequency === "ONE_TIME" && "bg-violet-50 text-violet-700",
+                        h.frequency === "EVENT"    && "bg-amber-50 text-amber-700",
+                      )}>{h.frequency}</span>
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className={cn(
+                        "inline-flex items-center justify-center min-w-[2rem] font-mono tabular-nums text-[10px] font-black px-1.5 py-0.5 rounded",
+                        h.priority <= 10 ? "bg-rose-100 text-rose-700"
+                        : h.priority <= 30 ? "bg-amber-100 text-amber-700"
+                        : "bg-slate-100 text-slate-600",
+                      )}
+                      title={`Priority ${h.priority} — ${h.priority <= 10 ? "highest" : h.priority <= 30 ? "elevated" : "normal/low"}`}
+                      >
+                        P{h.priority}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums">
+                      <span className="text-slate-700 font-bold">{h.defaultAmount}</span>
+                      {h.defaultDueDay && <span className="text-slate-400 text-[10px] ml-1">· d{h.defaultDueDay}</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-500">{h.usageCount}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <div className="inline-flex items-center gap-1">
+                        <button onClick={() => setEditing(h)} className="w-7 h-7 rounded-md inline-flex items-center justify-center text-slate-400 hover:text-primary hover:bg-primary/8 cursor-pointer transition-colors" aria-label="Edit">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => handleToggle(h.id)} disabled={pending} className="w-7 h-7 rounded-md inline-flex items-center justify-center text-slate-400 hover:text-amber-700 hover:bg-amber-50 cursor-pointer transition-colors disabled:opacity-40" aria-label={h.isActive ? "Deactivate" : "Activate"}>
+                          {h.isActive ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

@@ -138,8 +138,15 @@ function TbRow({ r, fyId }: { r: TrialBalanceRow; fyId: string }) {
     <tr className="hover:bg-primary/4 transition-colors">
       <td className="px-4 py-2 font-mono text-xs text-slate-500">{r.code}</td>
       <td className="px-4 py-2">
-        <Link href={`/accounting/ledger?account=${r.accountId}&fy=${fyId}`} className="hover:text-primary hover:underline">
+        <Link
+          href={`/accounting/ledger?account=${r.accountId}&fy=${fyId}`}
+          className="hover:text-primary hover:underline inline-flex items-center gap-1 group"
+          title="Drill down to the ledger — see every JE line and click through to the source voucher"
+        >
           {r.name}
+          <svg className="w-3 h-3 text-slate-300 group-hover:text-primary transition-colors flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M7 7h10v10"/><path d="M7 17 17 7"/>
+          </svg>
         </Link>
       </td>
       <td className="px-4 py-2">

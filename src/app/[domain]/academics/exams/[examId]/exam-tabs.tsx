@@ -2,7 +2,6 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { motion } from "framer-motion"
 import {
   LayoutDashboard, CalendarRange, Grid3X3, UserCog, ClipboardCheck, FileBarChart2,
 } from "lucide-react"
@@ -38,22 +37,15 @@ export function ExamTabs({ examId }: { examId: string }) {
             key={t.suffix}
             href={href}
             aria-current={active ? "page" : undefined}
-            className="relative"
-          >
-            {active && (
-              <motion.div
-                layoutId="exam-tabs-pill"
-                className="absolute inset-0 bg-primary rounded-lg shadow-sm shadow-primary/40"
-                transition={{ type: "spring", stiffness: 380, damping: 35 }}
-              />
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3.5 py-2 text-sm rounded-lg transition-colors duration-150 whitespace-nowrap cursor-pointer",
+              active
+                ? "bg-primary text-primary-foreground font-semibold shadow-sm shadow-primary/40"
+                : "font-medium text-muted-foreground hover:text-foreground hover:bg-slate-100/70",
             )}
-            <span className={cn(
-              "relative z-10 inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium rounded-lg transition-colors duration-150 whitespace-nowrap cursor-pointer",
-              active ? "text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-            )}>
-              <Icon className="w-3.5 h-3.5" />
-              {t.label}
-            </span>
+          >
+            <Icon className="w-3.5 h-3.5" />
+            {t.label}
           </Link>
         )
       })}

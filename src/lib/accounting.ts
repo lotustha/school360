@@ -14,14 +14,15 @@ export type AccountSubType =
   | "OPERATING_EXPENSE" | "OTHER_EXPENSE"
   | null
 
-export type VoucherType = "RV" | "PV" | "CV" | "JV"
-export const VOUCHER_TYPES = ["RV", "PV", "CV", "JV"] as const
+export type VoucherType = "RV" | "PV" | "CV" | "JV" | "BL"
+export const VOUCHER_TYPES = ["RV", "PV", "CV", "JV", "BL"] as const
 
 export const VOUCHER_TYPE_LABEL: Record<VoucherType, string> = {
   RV: "Receipt Voucher",
   PV: "Payment Voucher",
   CV: "Contra Voucher",
   JV: "Journal Voucher",
+  BL: "Bill Voucher",
 }
 
 export type VoucherStatus = "DRAFT" | "POSTED" | "REVERSED"

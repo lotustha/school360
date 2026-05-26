@@ -296,7 +296,7 @@ export function PlanEditorClient({ plan, fiscalYears, heads, classes }: Props) {
                     className="font-mono text-xs h-10"
                   />
                   {isMonthly && (
-                    <p className="text-[10px] text-slate-400 mt-0.5 px-1">1=Shrawan · 12=Asar · use &quot;1,3,5&quot; for selective months</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5 px-1">Period numbers map to the plan&apos;s calendar (BS: 1=Baisakh…12=Chaitra; AD: 1=Jan…12=Dec). Use &quot;1,3,5&quot; for selective months.</p>
                   )}
                 </div>
                 <Input

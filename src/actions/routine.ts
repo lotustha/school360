@@ -1,6 +1,7 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
+import { compareClassNames } from "@/lib/class-sort"
 import { revalidatePath } from "next/cache"
 
 // ─── PeriodSchedule (time-slot templates) ───────────────────────────────────
@@ -170,6 +171,257 @@ export async function applyScheduleToClasses(scheduleId: string, classIds: strin
 }
 
 // ─── Class routine fetch (full grid) ────────────────────────────────────────
+
+/**
+ * Quick-assign payload: subjects available for a class + their primary teacher,
+ * plus the class's effective working days. Powers the double-click radial
+ * picker on /academics/routine/compact.
+ */
+export interface QuickAssignSubject {
+  subjectId:        string
+  subjectName:      string
+  subjectShortName: string | null
+  subjectCode:      string | null
+  teacherUserId:    string | null
+  teacherName:      string | null
+  teacherAvatarUrl: string | null
+}
+export interface QuickAssignContext {
+  classId:      string
+  className:    string
+  workingDays:  number[]
+  subjects:     QuickAssignSubject[]
+}
+
+export async function getQuickAssignContext(classId: string): Promise<QuickAssignContext | null> {
+  const cls = await prisma.class.findUnique({
+    where: { id: classId },
+    include: {
+      school:   { select: { workingDays: true } },
+      faculty:  { select: { workingDays: true } },
+      subjects: {
+        orderBy: { name: "asc" },
+        include: {
+          teachers: {
+            orderBy: [{ isPrimary: "desc" }, { teacher: { fullName: "asc" } }],
+            take:    1,
+            include: { teacher: { select: { id: true, fullName: true, avatarUrl: true } } },
+          },
+        },
+      },
+    },
+  })
+  if (!cls) return null
+  const effectiveDays =
+    cls.workingDays.length > 0          ? cls.workingDays :
+    cls.faculty?.workingDays.length     ? cls.faculty.workingDays :
+                                          cls.school.workingDays
+  return {
+    classId:     cls.id,
+    className:   cls.name,
+    workingDays: effectiveDays,
+    subjects:    cls.subjects.map(s => {
+      const t = s.teachers[0]?.teacher ?? null
+      return {
+        subjectId:        s.id,
+        subjectName:      s.name,
+        subjectShortName: s.shortName,
+        subjectCode:      s.code,
+        teacherUserId:    t?.id ?? null,
+        teacherName:      t?.fullName ?? null,
+        teacherAvatarUrl: t?.avatarUrl ?? null,
+      }
+    }),
+  }
+}
+
+/**
+ * Current assignments at a (class × period slot). Returns ONE row per
+ * (day, subjectId) — supports multi-subject cells (combined sessions where
+ * two subjects share the same slot, e.g. Math + Science overlap).
+ */
+export interface SlotDayAssignment {
+  day:              number
+  subjectId:        string | null
+  subjectShortName: string | null
+  subjectName:      string | null
+  entryId:          string  // for fine-grained delete
+}
+
+export async function getRoutineSlotAssignments(
+  classId: string, periodSlotId: string,
+): Promise<SlotDayAssignment[]> {
+  const rows = await prisma.routineEntry.findMany({
+    where:   { classId, periodSlotId },
+    include: { subject: { select: { id: true, name: true, shortName: true } } },
+    orderBy: { dayOfWeek: "asc" },
+  })
+  return rows.map(r => ({
+    entryId:          r.id,
+    day:              r.dayOfWeek,
+    subjectId:        r.subjectId,
+    subjectShortName: r.subject?.shortName ?? null,
+    subjectName:      r.subject?.name ?? null,
+  }))
+}
+
+/**
+ * Clear ALL routine entries at a (class × slot × day) cell — used by
+ * "Replace mode" before assigning a single subject, and by "Clear all".
+ */
+export async function clearRoutineSlotDay(args: {
+  classId:      string
+  periodSlotId: string
+  dayOfWeek:    number
+}): Promise<{ deleted: number }> {
+  const res = await prisma.routineEntry.deleteMany({
+    where: {
+      classId:      args.classId,
+      periodSlotId: args.periodSlotId,
+      dayOfWeek:    args.dayOfWeek,
+    },
+  })
+  revalidatePath(`/academics/routine/${args.classId}`)
+  revalidatePath(`/academics/routine/compact`)
+  revalidatePath(`/academics/routine`)
+  return { deleted: res.count }
+}
+
+/**
+ * Remove ONE specific (subject) assignment from a (class × slot × day),
+ * leaving any other subjects on that cell intact. Used when toggling a
+ * single subject off in combined mode.
+ */
+export async function clearRoutineSlotSubject(args: {
+  classId:      string
+  periodSlotId: string
+  dayOfWeek:    number
+  subjectId:    string
+}): Promise<{ deleted: number }> {
+  const res = await prisma.routineEntry.deleteMany({
+    where: {
+      classId:      args.classId,
+      periodSlotId: args.periodSlotId,
+      dayOfWeek:    args.dayOfWeek,
+      subjectId:    args.subjectId,
+    },
+  })
+  revalidatePath(`/academics/routine/${args.classId}`)
+  revalidatePath(`/academics/routine/compact`)
+  revalidatePath(`/academics/routine`)
+  return { deleted: res.count }
+}
+
+/**
+ * For a given (period slot, days) and a list of teachers, returns which
+ * (teacher, day) combos are already taken by OTHER classes. Used by the
+ * quick-assign matrix to mark busy cells before the user clicks.
+ *
+ * Returns a map keyed by `${teacherUserId}:${dayOfWeek}` to a brief
+ * description of the existing assignment ("Class 10-A · Math").
+ */
+export async function getTeacherBusyAtSlot(args: {
+  periodSlotId:   string
+  excludeClassId: string
+  teacherUserIds: string[]
+  days:           number[]
+}): Promise<Record<string, string>> {
+  if (args.teacherUserIds.length === 0 || args.days.length === 0) return {}
+  const rows = await prisma.routineEntry.findMany({
+    where: {
+      periodSlotId:   args.periodSlotId,
+      classId:        { not: args.excludeClassId },
+      teacherUserId:  { in: args.teacherUserIds },
+      dayOfWeek:      { in: args.days },
+    },
+    select: {
+      teacherUserId: true,
+      dayOfWeek:     true,
+      class:         { select: { name: true } },
+      subject:       { select: { name: true, shortName: true } },
+    },
+  })
+  const map: Record<string, string> = {}
+  for (const r of rows) {
+    if (!r.teacherUserId) continue
+    const key = `${r.teacherUserId}:${r.dayOfWeek}`
+    const subj = r.subject?.shortName ?? r.subject?.name ?? "—"
+    map[key] = `${r.class.name} · ${subj}`
+  }
+  return map
+}
+
+/**
+ * Add ONE subject entry to a (class × slot × day) WITHOUT clearing existing
+ * entries. Used by "Combined" mode in the quick-assign matrix. Skips create
+ * if an identical (subject) entry already exists there.
+ */
+export async function addRoutineSlotSubject(args: {
+  classId:       string
+  periodSlotId:  string
+  dayOfWeek:     number
+  subjectId:     string
+  teacherUserId: string | null
+}): Promise<{ created: boolean }> {
+  const existing = await prisma.routineEntry.findFirst({
+    where: {
+      classId:      args.classId,
+      periodSlotId: args.periodSlotId,
+      dayOfWeek:    args.dayOfWeek,
+      subjectId:    args.subjectId,
+    },
+    select: { id: true },
+  })
+  if (existing) return { created: false }
+  await prisma.routineEntry.create({
+    data: {
+      classId:        args.classId,
+      periodSlotId:   args.periodSlotId,
+      dayOfWeek:      args.dayOfWeek,
+      subjectId:      args.subjectId,
+      teacherUserId:  args.teacherUserId ?? null,
+      studentGroupId: null,
+      note:           null,
+    },
+  })
+  revalidatePath(`/academics/routine/${args.classId}`)
+  revalidatePath(`/academics/routine/compact`)
+  revalidatePath(`/academics/routine`)
+  return { created: true }
+}
+
+/**
+ * Quick assignment: stamps a (subject, teacher) into the (class × period slot)
+ * for every supplied day. Idempotent — calls setRoutineEntry per day, which
+ * upserts internally. Conflicts auto-acknowledged because the caller picked
+ * the subject explicitly.
+ */
+export async function quickAssignRoutineSlot(args: {
+  classId:       string
+  periodSlotId:  string
+  subjectId:     string
+  teacherUserId: string | null
+  days:          number[]
+}): Promise<{ created: number; skipped: number }> {
+  let created = 0
+  let skipped = 0
+  for (const dayOfWeek of args.days) {
+    try {
+      await setRoutineEntry({
+        classId:               args.classId,
+        periodSlotId:          args.periodSlotId,
+        dayOfWeek,
+        subjectId:             args.subjectId,
+        teacherUserId:         args.teacherUserId,
+        acknowledgeConflicts:  true,
+      })
+      created++
+    } catch {
+      skipped++
+    }
+  }
+  return { created, skipped }
+}
 
 export async function getClassRoutine(classId: string) {
   const cls = await prisma.class.findUnique({
@@ -522,7 +774,25 @@ export async function getCompactRoutineGrid(args: {
         },
       },
     },
+    // Prisma can't sort strings numerically — "Class 10" comes between "Class 1"
+    // and "Class 2" lexically. Pull alphabetically here, then re-sort below
+    // with a natural-aware Intl.Collator.
     orderBy: [{ faculty: { name: "asc" } }, { name: "asc" }],
+  })
+
+  // Natural sort by (faculty, class progression). Uses the shared comparator
+  // so ECD/Nursery/LKG/UKG precede numbered grades, and "Class 10" sorts
+  // after "Class 9" instead of next to "Class 1".
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+  classes.sort((a, b) => {
+    const af = a.faculty?.name ?? ""
+    const bf = b.faculty?.name ?? ""
+    if (af !== bf) {
+      if (af === "") return  1   // General/null faculty sorts last
+      if (bf === "") return -1
+      return collator.compare(af, bf)
+    }
+    return compareClassNames(a.name, b.name)
   })
 
   return classes.map(cls => {
@@ -584,6 +854,21 @@ export async function getCompactRoutineGrid(args: {
   })
 }
 
+/**
+ * Compute the duration of a period slot in minutes from "HH:MM" strings.
+ * Returns 0 if either value is missing or unparseable.
+ */
+function slotMinutes(startTime: string | null, endTime: string | null): number {
+  if (!startTime || !endTime) return 0
+  const [sh, sm] = startTime.split(":").map(n => parseInt(n, 10))
+  const [eh, em] = endTime.split(":").map(n => parseInt(n, 10))
+  if ([sh, sm, eh, em].some(v => Number.isNaN(v))) return 0
+  const start = sh * 60 + sm
+  const end   = eh * 60 + em
+  if (end <= start) return 0
+  return end - start
+}
+
 // Local class-short helper kept in this module (server-only context).
 // We deliberately don't import from src/lib/routine-format because that file
 // is also pulled into client code that might bundle it twice.
@@ -599,10 +884,19 @@ export interface TeacherWeekCell {
   classId:          string
   className:        string
   classShortName:   string
+  facultyId:        string | null
+  facultyName:      string | null
   subjectId:        string | null
   subjectName:      string | null
   subjectShortName: string | null
   studentGroupName: string | null
+}
+
+export interface TeacherFacultyBreakdown {
+  facultyId:   string | null
+  facultyName: string         // "General" when facultyId is null
+  periods:     number
+  minutes:     number
 }
 
 export interface TeacherWeek {
@@ -612,8 +906,14 @@ export interface TeacherWeek {
   /** entries[periodIndex][dayOfWeek 0..6] = TeacherWeekCell[] */
   weekMatrix:   Record<string, Record<number, TeacherWeekCell[]>>
   /** Ordered unique periodSlot ids the teacher actually teaches in */
-  slots:        { id: string; label: string | null; orderIndex: number }[]
+  slots:        { id: string; label: string | null; orderIndex: number; startTime: string | null; endTime: string | null; isBreak: boolean }[]
   workingDays:  number[]
+  /** Total teaching minutes per week (sum of teaching-slot durations × entries). */
+  weeklyMinutes: number
+  /** Total teaching periods per week (count of entries, regardless of duration). */
+  weeklyPeriods: number
+  /** Per-faculty workload — periods + minutes — sorted by periods desc. */
+  facultyBreakdown: TeacherFacultyBreakdown[]
 }
 
 export async function getTeacherWeekRoutines(args: {
@@ -648,9 +948,9 @@ export async function getTeacherWeekRoutines(args: {
     },
     include: {
       teacher:      { select: { id: true, fullName: true, avatarUrl: true } },
-      class:        { select: { id: true, name: true, faculty: { select: { workingDays: true } }, workingDays: true } },
+      class:        { select: { id: true, name: true, facultyId: true, faculty: { select: { name: true, workingDays: true } }, workingDays: true } },
       subject:      { select: { id: true, name: true, shortName: true } },
-      periodSlot:   { select: { id: true, label: true, orderIndex: true } },
+      periodSlot:   { select: { id: true, label: true, orderIndex: true, startTime: true, endTime: true, isBreak: true } },
       studentGroup: { select: { name: true } },
     },
   })
@@ -666,6 +966,9 @@ export async function getTeacherWeekRoutines(args: {
       weekMatrix:    {},
       slots:         [],
       workingDays:   [],
+      weeklyMinutes: 0,
+      weeklyPeriods: 0,
+      facultyBreakdown: [],
     }
 
     const day = e.dayOfWeek
@@ -677,6 +980,8 @@ export async function getTeacherWeekRoutines(args: {
       classId:          e.class.id,
       className:        e.class.name,
       classShortName:   shortClassNameFromName(e.class.name),
+      facultyId:        e.class.facultyId ?? null,
+      facultyName:      e.class.faculty?.name ?? null,
       subjectId:        e.subjectId,
       subjectName:      e.subject?.name      ?? null,
       subjectShortName: e.subject?.shortName ?? null,
@@ -684,7 +989,32 @@ export async function getTeacherWeekRoutines(args: {
     })
 
     if (!t.slots.some(s => s.id === slotKey)) {
-      t.slots.push({ id: slotKey, label: e.periodSlot.label, orderIndex: e.periodSlot.orderIndex })
+      t.slots.push({
+        id:         slotKey,
+        label:      e.periodSlot.label,
+        orderIndex: e.periodSlot.orderIndex,
+        startTime:  e.periodSlot.startTime,
+        endTime:    e.periodSlot.endTime,
+        isBreak:    e.periodSlot.isBreak,
+      })
+    }
+
+    // Accumulate workload (skip break slots — teachers don't teach in breaks)
+    if (!e.periodSlot.isBreak) {
+      t.weeklyPeriods += 1
+      const m = slotMinutes(e.periodSlot.startTime, e.periodSlot.endTime)
+      if (m > 0) t.weeklyMinutes += m
+
+      // Per-faculty workload. Bucket by facultyId (null = General).
+      const fid   = e.class.facultyId ?? null
+      const fname = e.class.faculty?.name ?? "General"
+      const bucket = t.facultyBreakdown.find(b => b.facultyId === fid)
+      if (bucket) {
+        bucket.periods += 1
+        if (m > 0) bucket.minutes += m
+      } else {
+        t.facultyBreakdown.push({ facultyId: fid, facultyName: fname, periods: 1, minutes: m > 0 ? m : 0 })
+      }
     }
 
     // Track effective working days as a union across all classes this teacher visits
@@ -700,11 +1030,17 @@ export async function getTeacherWeekRoutines(args: {
     byTeacher.set(e.teacher.id, t)
   }
 
-  // Final sort: slots by orderIndex, working days asc, teachers by name
+  // Final sort: slots by orderIndex, working days asc, faculty breakdown by
+  // periods desc (with General pinned last), teachers by name.
   const out: TeacherWeek[] = []
   for (const t of byTeacher.values()) {
     t.slots.sort((a, b) => a.orderIndex - b.orderIndex)
     t.workingDays.sort((a, b) => a - b)
+    t.facultyBreakdown.sort((a, b) => {
+      if (a.facultyId === null && b.facultyId !== null) return 1
+      if (b.facultyId === null && a.facultyId !== null) return -1
+      return b.periods - a.periods
+    })
     out.push(t)
   }
   out.sort((a, b) => a.teacherName.localeCompare(b.teacherName))

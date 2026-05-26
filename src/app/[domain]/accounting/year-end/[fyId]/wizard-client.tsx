@@ -103,6 +103,27 @@ export function YearEndWizard({ preview, allFiscalYears }: { preview: YearEndPre
           sub={preview.nextFiscalYearName ? `→ FY ${preview.nextFiscalYearName}` : "Next FY not set"} />
       </div>
 
+      {/* AR carry-forward warning — surfaced before close so the accountant
+          knows uncollected fees will follow the student into next year. */}
+      {parseFloat(preview.arOutstanding) > 0 && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 backdrop-blur-xl p-4 flex items-start gap-3">
+          <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0">
+            <span className="text-amber-700 text-base font-black">!</span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-amber-900">
+              Rs. {preview.arOutstanding} of student fees are still outstanding ({preview.arUnpaidRowCount} bill{preview.arUnpaidRowCount === 1 ? "" : "s"})
+            </p>
+            <p className="text-xs text-amber-800 mt-1 leading-relaxed">
+              These will carry forward into {preview.nextFiscalYearName ? `FY ${preview.nextFiscalYearName}` : "the next FY"} as
+              Accounts Receivable. You can still collect them from the parents next year. If any are uncollectable,
+              write them off in <a href="/finance/students" className="underline font-bold">/finance/students</a> before
+              closing — that way the loss is recognized in this FY&apos;s income statement, not next year&apos;s.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Closing JV preview */}
       <div className="bg-white/70 backdrop-blur-xl rounded-2xl border border-white/40 shadow-sm overflow-hidden">
         <div className="px-5 py-3 border-b border-white/60">

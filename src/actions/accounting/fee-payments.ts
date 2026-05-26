@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma"
 import { requirePermission } from "@/lib/permissions"
 import { toAD } from "@/lib/nepali-date"
 import { resolveFiscalYearForDate } from "@/actions/accounting/fiscal-years"
-import { applyAllocations, planFifoAllocations } from "@/actions/billing/allocations"
+import { applyAllocations, planFifoAllocations, resolveReceivableAccountId } from "@/actions/billing/allocations"
 
 const D = Prisma.Decimal
 
@@ -120,51 +120,65 @@ export async function recordFeePayment(input: RecordFeePaymentInput): Promise<Re
       }
     }
 
-    // Step 2: derive per-head lines so GL credits the right INCOME heads
-    let derivedLines: Array<{ feeAccountId: string; accountName: string; amount: Prisma.Decimal; remarks: string | null }>
+    // Step 2: derive per-head lines so GL credits the right INCOME heads.
+    // Two buckets:
+    //   - billAllocLines: payments against existing/PLANNED bills.
+    //     GL credit goes to AR (income was already recognized when the bill
+    //     was issued via a BL voucher).
+    //   - extraLines: ad-hoc charges (library fine, etc.) with no bill behind
+    //     them. GL credit goes directly to INCOME (cash sale).
+    // Both still produce one FeePaymentLine each so the receipt printout shows
+    // the per-head breakdown.
+    const billAllocLines: Array<{ feeAccountId: string; accountName: string; amount: Prisma.Decimal; remarks: string | null }> = []
+    const extraLines:     Array<{ feeAccountId: string; accountName: string; amount: Prisma.Decimal; remarks: string | null }> = []
 
-    if (data.lines && data.lines.length > 0) {
-      const accIds = Array.from(new Set(data.lines.map(l => l.feeAccountId)))
-      const accs = await tx.account.findMany({ where: { id: { in: accIds }, schoolId }, select: { id: true, name: true } })
-      const nameById = new Map(accs.map(a => [a.id, a.name]))
-      derivedLines = data.lines.map(l => ({
-        feeAccountId: l.feeAccountId,
-        accountName:  nameById.get(l.feeAccountId) ?? "Fee",
-        amount:       new D(l.amount),
-        remarks:      l.remarks?.trim() || null,
-      }))
-    } else if (allocations.length > 0) {
-      // Each StudentFee row carries exactly one feeHead → exactly one income account.
-      // The allocation amount goes 1:1 to that account (no proration needed).
+    if (allocations.length > 0) {
       const ids = allocations.map(a => a.studentFeeId)
       const rows = await tx.studentFee.findMany({
         where: { id: { in: ids }, schoolId },
         include: { feeHead: { include: { feeAccount: { select: { id: true, name: true } } } } },
       })
       const rowById = new Map(rows.map(r => [r.id, r]))
-
-      const perHead = new Map<string, { name: string; amount: Prisma.Decimal }>()
       for (const a of allocations) {
         const row = rowById.get(a.studentFeeId)
         if (!row) throw new Error("Fee row not found during line derivation")
         const acc = row.feeHead.feeAccount
-        const existing = perHead.get(acc.id)
-        if (existing) existing.amount = existing.amount.plus(a.amount)
-        else perHead.set(acc.id, { name: acc.name, amount: new D(a.amount) })
+        billAllocLines.push({
+          feeAccountId: acc.id,
+          accountName:  acc.name,
+          amount:       a.amount,
+          remarks:      row.periodLabel,
+        })
       }
+    }
 
-      derivedLines = Array.from(perHead.entries()).map(([id, v]) => ({
-        feeAccountId: id,
-        accountName:  v.name,
-        amount:       v.amount,
-        remarks:      null,
-      }))
-    } else {
+    if (data.lines && data.lines.length > 0) {
+      const accIds = Array.from(new Set(data.lines.map(l => l.feeAccountId)))
+      const accs = await tx.account.findMany({ where: { id: { in: accIds }, schoolId }, select: { id: true, name: true } })
+      const nameById = new Map(accs.map(a => [a.id, a.name]))
+      for (const l of data.lines) {
+        extraLines.push({
+          feeAccountId: l.feeAccountId,
+          accountName:  nameById.get(l.feeAccountId) ?? "Fee",
+          amount:       new D(l.amount),
+          remarks:      l.remarks?.trim() || null,
+        })
+      }
+    }
+
+    const derivedLines = [...billAllocLines, ...extraLines]
+    if (derivedLines.length === 0) {
       throw new Error("Cannot record payment: no lines and no allocations resolved")
     }
 
     const total = derivedLines.reduce((s, l) => s.plus(l.amount), new D(0))
     if (total.lessThanOrEqualTo(0)) throw new Error("Total must be greater than zero")
+
+    // Aggregate AR credit for the bill portion (single voucher line, easier to trace)
+    const arCreditTotal = billAllocLines.reduce((s, l) => s.plus(l.amount), new D(0))
+    const arAccountId = arCreditTotal.greaterThan(0)
+      ? await resolveReceivableAccountId(tx, schoolId)
+      : null
 
     // Step 3: allocate counters
     const rc = await tx.voucherCounter.upsert({
@@ -185,20 +199,40 @@ export async function recordFeePayment(input: RecordFeePaymentInput): Promise<Re
       ? `${student.user.fullName} · ${student.class.name}${student.section ? "-" + student.section.name : ""}`
       : student.user.fullName
 
-    // Step 4: voucher lines (1 debit, N credits)
-    const voucherLines = [
+    // Step 4: voucher lines under accrual:
+    //   DR Cash/Bank (total)
+    //   CR AR (aggregated) for bill allocations — income was already recognized
+    //     at billing time on the corresponding BL voucher(s)
+    //   CR Income (per head) for ad-hoc charges — direct cash sale, no bill
+    const voucherLines: Array<{
+      schoolId: string; accountId: string; lineNo: number;
+      debit: Prisma.Decimal; credit: Prisma.Decimal;
+      partyType: string; partyId: string;
+      narration?: string;
+    }> = [
       {
         schoolId, accountId: sourceAccountId, lineNo: 1,
         debit: total, credit: new D(0),
         partyType: "STUDENT", partyId: data.studentId,
       },
-      ...derivedLines.map((line, i) => ({
-        schoolId, accountId: line.feeAccountId, lineNo: i + 2,
+    ]
+    let lineNo = 2
+    if (arAccountId && arCreditTotal.greaterThan(0)) {
+      voucherLines.push({
+        schoolId, accountId: arAccountId, lineNo: lineNo++,
+        debit: new D(0), credit: arCreditTotal,
+        partyType: "STUDENT", partyId: data.studentId,
+        narration: `Settle outstanding bills (${billAllocLines.length} row${billAllocLines.length === 1 ? "" : "s"})`,
+      })
+    }
+    for (const line of extraLines) {
+      voucherLines.push({
+        schoolId, accountId: line.feeAccountId, lineNo: lineNo++,
         debit: new D(0), credit: line.amount,
         partyType: "STUDENT", partyId: data.studentId,
         narration: line.remarks ? `${line.accountName} — ${line.remarks}` : line.accountName,
-      })),
-    ]
+      })
+    }
 
     const voucher = await tx.voucher.create({
       data: {
@@ -250,9 +284,17 @@ export async function recordFeePayment(input: RecordFeePaymentInput): Promise<Re
       select: { id: true, receiptNumber: true },
     })
 
-    // Step 6: write allocation rows + update bill paidAmount/status
+    // Step 6: write allocation rows + update bill paidAmount/status.
+    // Pass accrualCtx so PLANNED rows auto-billed during collection also get a
+    // real BL Voucher posted (DR AR / CR Income) in the same transaction.
     if (allocations.length > 0) {
-      await applyAllocations(tx, schoolId, fp.id, allocations)
+      await applyAllocations(tx, schoolId, fp.id, allocations, {
+        fiscalYearId: fy.id,
+        fyName:       fy.name,
+        dateBS:       data.dateBS,
+        dateAD,
+        userId:       session.user.id,
+      })
     }
 
     return {
@@ -301,6 +343,7 @@ export interface FeePaymentRow {
   dateBS:        string
   voucherNumber: string | null
   voucherId:     string | null
+  voucherStatus: string | null  // POSTED | REVERSED
   remarks:       string | null
 }
 
@@ -323,9 +366,8 @@ export async function listFeePayments(filters: FeePaymentFilters = {}): Promise<
     },
     include: {
       student:     { include: { user: { select: { fullName: true } }, class: { select: { name: true } }, section: { select: { name: true } } } },
-      feeAccount:  { select: { code: true, name: true } },
       lines:       { include: { feeAccount: { select: { code: true, name: true } } }, orderBy: { lineNo: "asc" } },
-      voucher:     { select: { id: true, number: true } },
+      voucher:     { select: { id: true, number: true, status: true } },
       bankAccount: { select: { bankName: true } },
     },
     orderBy: [{ dateAD: "desc" }, { createdAt: "desc" }],
@@ -333,22 +375,12 @@ export async function listFeePayments(filters: FeePaymentFilters = {}): Promise<
   })
 
   return rows.map(r => {
-    // Multi-line rows: read FeePaymentLine. Legacy rows: synthesize from header feeAccount.
-    const lines: FeePaymentLineView[] = r.lines.length > 0
-      ? r.lines.map(l => ({
-          feeAccountCode: l.feeAccount.code,
-          feeAccountName: l.feeAccount.name,
-          amount:         l.amount.toFixed(2),
-          remarks:        l.remarks,
-        }))
-      : r.feeAccount
-        ? [{
-            feeAccountCode: r.feeAccount.code,
-            feeAccountName: r.feeAccount.name,
-            amount:         r.amount.toFixed(2),
-            remarks:        r.remarks,
-          }]
-        : []
+    const lines: FeePaymentLineView[] = r.lines.map(l => ({
+      feeAccountCode: l.feeAccount.code,
+      feeAccountName: l.feeAccount.name,
+      amount:         l.amount.toFixed(2),
+      remarks:        l.remarks,
+    }))
 
     const first = lines[0]
     return {
@@ -368,6 +400,7 @@ export async function listFeePayments(filters: FeePaymentFilters = {}): Promise<
       dateBS:        r.dateBS,
       voucherNumber: r.voucher?.number ?? null,
       voucherId:     r.voucher?.id ?? null,
+      voucherStatus: r.voucher?.status ?? null,
       remarks:       r.remarks,
     }
   })
@@ -401,7 +434,6 @@ export async function getFeePayment(id: string): Promise<FeePaymentReceipt | nul
     where: { id },
     include: {
       student:     { include: { user: { select: { fullName: true } }, class: { select: { name: true } }, section: { select: { name: true } } } },
-      feeAccount:  { select: { name: true } },
       lines:       { include: { feeAccount: { select: { name: true } } }, orderBy: { lineNo: "asc" } },
       voucher:     { select: { number: true } },
       bankAccount: { select: { bankName: true } },
@@ -413,15 +445,11 @@ export async function getFeePayment(id: string): Promise<FeePaymentReceipt | nul
     ? await prisma.user.findUnique({ where: { id: r.collectedById }, select: { fullName: true } })
     : null
 
-  const lines: FeePaymentReceiptLine[] = r.lines.length > 0
-    ? r.lines.map(l => ({
-        feeAccountName: l.feeAccount.name,
-        amount:         l.amount.toFixed(2),
-        remarks:        l.remarks,
-      }))
-    : r.feeAccount
-      ? [{ feeAccountName: r.feeAccount.name, amount: r.amount.toFixed(2), remarks: null }]
-      : []
+  const lines: FeePaymentReceiptLine[] = r.lines.map(l => ({
+    feeAccountName: l.feeAccount.name,
+    amount:         l.amount.toFixed(2),
+    remarks:        l.remarks,
+  }))
 
   return {
     id:             r.id,
@@ -442,39 +470,103 @@ export async function getFeePayment(id: string): Promise<FeePaymentReceipt | nul
   }
 }
 
-/** Quick-search students by name / admission no for the collection form. */
-export async function searchStudents(q: string): Promise<Array<{
-  id: string; name: string; admissionNo: string; className: string | null; avatarUrl: string | null
-}>> {
+export interface StudentSearchRow {
+  id:           string
+  name:         string
+  nameNepali:   string | null
+  admissionNo:  string
+  rollNumber:   string | null
+  className:    string | null   // "Class 10-A"
+  facultyName:  string | null   // "Science", "Management", or null
+  gender:       string | null
+  avatarUrl:    string | null
+}
+
+/** Quick-search students by name / admission no / roll for the collection form. */
+export async function searchStudents(q: string, opts?: { take?: number; classId?: string; facultyId?: string }): Promise<StudentSearchRow[]> {
   const session = await requirePermission("finance:view")
   const query = q.trim()
-  if (query.length < 2) return []
+  if (!query && !opts?.classId && !opts?.facultyId) return []
 
   const rows = await prisma.student.findMany({
     where: {
       schoolId: session.user.schoolId!,
-      OR: [
-        { user:        { fullName: { contains: query, mode: "insensitive" } } },
-        { admissionNo: { contains: query, mode: "insensitive" } },
-      ],
+      status:   "ACTIVE",
+      ...(opts?.classId   && { classId: opts.classId }),
+      ...(opts?.facultyId && { class: { facultyId: opts.facultyId } }),
+      ...(query.length >= 1 && {
+        OR: [
+          { user:        { fullName: { contains: query, mode: "insensitive" } } },
+          { admissionNo: { contains: query, mode: "insensitive" } },
+          { rollNumber:  { contains: query, mode: "insensitive" } },
+        ],
+      }),
     },
     include: {
       user:    { select: { fullName: true, avatarUrl: true } },
-      class:   { select: { name: true } },
+      class:   { select: { name: true, faculty: { select: { name: true } } } },
       section: { select: { name: true } },
     },
-    take: 10,
-    orderBy: { user: { fullName: "asc" } },
+    take:    opts?.take ?? 12,
+    orderBy: [{ class: { name: "asc" } }, { rollNumber: "asc" }, { user: { fullName: "asc" } }],
   })
 
   return rows.map(r => ({
     id:          r.id,
     name:        r.user.fullName,
+    nameNepali:  r.fullNameNepali,
     admissionNo: r.admissionNo,
+    rollNumber:  r.rollNumber,
     className:   r.class
       ? `${r.class.name}${r.section ? "-" + r.section.name : ""}`
       : null,
+    facultyName: r.class?.faculty?.name ?? null,
+    gender:      r.gender,
     avatarUrl:   r.user.avatarUrl,
+  }))
+}
+
+/**
+ * Recently-collected-from students for the signed-in user.
+ *
+ * Returns up to `take` distinct students this user has recorded payments
+ * for, most recent first. Server-side so it works across devices and
+ * doesn't leak names to other users on a shared machine.
+ */
+export async function getRecentlyCollectedStudents(take = 6): Promise<StudentSearchRow[]> {
+  const session = await requirePermission("finance:view")
+  const userId  = session.user.id
+  const schoolId = session.user.schoolId!
+  if (!userId) return []
+
+  const rows = await prisma.feePayment.findMany({
+    where:    { schoolId, collectedById: userId },
+    distinct: ["studentId"],
+    orderBy:  { createdAt: "desc" },
+    take,
+    include:  {
+      student: {
+        include: {
+          user:    { select: { fullName: true, avatarUrl: true } },
+          class:   { select: { name: true, faculty: { select: { name: true } } } },
+          section: { select: { name: true } },
+        },
+      },
+    },
+  })
+
+  return rows.map(r => ({
+    id:          r.student.id,
+    name:        r.student.user.fullName,
+    nameNepali:  r.student.fullNameNepali,
+    admissionNo: r.student.admissionNo,
+    rollNumber:  r.student.rollNumber,
+    className:   r.student.class
+      ? `${r.student.class.name}${r.student.section ? "-" + r.student.section.name : ""}`
+      : null,
+    facultyName: r.student.class?.faculty?.name ?? null,
+    gender:      r.student.gender,
+    avatarUrl:   r.student.user.avatarUrl,
   }))
 }
 
@@ -483,12 +575,13 @@ export async function getFinanceDashboard() {
   const session = await requirePermission("finance:view")
   const schoolId = session.user.schoolId!
 
-  // Today's BS date in AD
   const todayAD = new Date()
-  const startOfDay = new Date(todayAD); startOfDay.setHours(0, 0, 0, 0)
+  const startOfDay   = new Date(todayAD); startOfDay.setHours(0, 0, 0, 0)
   const startOfMonth = new Date(todayAD); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
+  // Trailing 14-day window for the trend chart
+  const start14 = new Date(startOfDay); start14.setDate(start14.getDate() - 13)
 
-  const [today, month, recent] = await Promise.all([
+  const [today, month, recent, outstanding, overdue, trendRaw, classBuckets] = await Promise.all([
     prisma.feePayment.aggregate({
       where: { schoolId, dateAD: { gte: startOfDay } },
       _sum: { amount: true },
@@ -502,23 +595,96 @@ export async function getFinanceDashboard() {
     prisma.feePayment.findMany({
       where:   { schoolId },
       orderBy: { createdAt: "desc" },
-      take:    5,
+      take:    10,
       include: {
         student:    { include: { user: { select: { fullName: true } } } },
-        feeAccount: { select: { name: true } },
         lines:      { include: { feeAccount: { select: { name: true } } }, orderBy: { lineNo: "asc" }, take: 1 },
         _count:     { select: { lines: true } },
+        voucher:    { select: { status: true } },
+      },
+    }),
+    // Total receivable: BILLED + PARTIAL + PLANNED rows' balance.
+    // PLANNED counts because the new Collect flow treats them as collectable.
+    prisma.studentFee.aggregate({
+      where: { schoolId, status: { in: ["BILLED", "PARTIAL", "PLANNED"] } },
+      _sum:  { finalAmount: true, paidAmount: true },
+    }),
+    prisma.studentFee.aggregate({
+      where: {
+        schoolId,
+        status:    { in: ["BILLED", "PARTIAL", "PLANNED"] },
+        dueDateAD: { lt: todayAD },
+      },
+      _sum:   { finalAmount: true, paidAmount: true },
+      _count: true,
+    }),
+    // Per-day collection for the trend chart (14 days)
+    prisma.feePayment.findMany({
+      where:   { schoolId, dateAD: { gte: start14 } },
+      select:  { dateAD: true, amount: true },
+    }),
+    // Per-class outstanding for the top-classes bar chart.
+    // Query StudentFee directly (filtered at the DB) rather than scanning every
+    // ACTIVE student — schools with thousands of students but few outstanding
+    // bills get a much smaller result set this way.
+    prisma.studentFee.findMany({
+      where: {
+        schoolId,
+        status:  { in: ["BILLED", "PARTIAL", "PLANNED"] },
+        student: { status: "ACTIVE" },
+      },
+      select: {
+        finalAmount: true,
+        paidAmount:  true,
+        student:     { select: { classId: true, class: { select: { name: true } } } },
       },
     }),
   ])
+
+  // Build day-by-day trend (fill in zero days so the chart is continuous)
+  const trendMap = new Map<string, number>()
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(start14); d.setDate(d.getDate() + i)
+    const key = d.toISOString().slice(0, 10)
+    trendMap.set(key, 0)
+  }
+  for (const t of trendRaw) {
+    const key = t.dateAD.toISOString().slice(0, 10)
+    trendMap.set(key, (trendMap.get(key) ?? 0) + parseFloat(t.amount.toString()))
+  }
+  const trend = Array.from(trendMap.entries()).map(([date, total]) => ({ date, total }))
+
+  // Aggregate per-class outstanding
+  const classMap = new Map<string, { name: string; outstanding: number; rowCount: number }>()
+  for (const fee of classBuckets) {
+    const classId = fee.student.classId
+    if (!classId || !fee.student.class) continue
+    const entry = classMap.get(classId) ?? { name: fee.student.class.name, outstanding: 0, rowCount: 0 }
+    entry.outstanding += parseFloat(fee.finalAmount.toString()) - parseFloat(fee.paidAmount.toString())
+    entry.rowCount++
+    classMap.set(classId, entry)
+  }
+  const topClasses = Array.from(classMap.entries())
+    .map(([classId, v]) => ({ classId, name: v.name, outstanding: v.outstanding, rowCount: v.rowCount }))
+    .filter(c => c.outstanding > 0)
+    .sort((a, b) => b.outstanding - a.outstanding)
+    .slice(0, 5)
+
+  const outstandingTotal = (outstanding._sum.finalAmount ?? new D(0)).minus(outstanding._sum.paidAmount ?? new D(0))
+  const overdueTotal     = (overdue._sum.finalAmount    ?? new D(0)).minus(overdue._sum.paidAmount    ?? new D(0))
 
   return {
     todayTotal:    (today._sum.amount ?? new D(0)).toFixed(2),
     todayCount:    today._count,
     monthTotal:    (month._sum.amount ?? new D(0)).toFixed(2),
     monthCount:    month._count,
+    outstandingTotal: outstandingTotal.toFixed(2),
+    overdueTotal:     overdueTotal.toFixed(2),
+    overdueCount:     overdue._count,
+    trend,
+    topClasses,
     recent: recent.map(r => {
-      const headName = r.lines[0]?.feeAccount.name ?? r.feeAccount?.name ?? "(no head)"
+      const headName = r.lines[0]?.feeAccount.name ?? "(no head)"
       const extras = Math.max(0, r._count.lines - 1)
       return {
         id:            r.id,
@@ -528,6 +694,7 @@ export async function getFinanceDashboard() {
         amount:        r.amount.toFixed(2),
         method:        r.method,
         dateBS:        r.dateBS,
+        voucherStatus: r.voucher?.status ?? null,
       }
     }),
   }

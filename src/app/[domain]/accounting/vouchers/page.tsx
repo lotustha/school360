@@ -1,6 +1,6 @@
 import Link from "next/link"
 import { Metadata } from "next"
-import { Plus, ReceiptText, Banknote, ArrowLeftRight, NotebookPen, Zap } from "lucide-react"
+import { Plus, ReceiptText, Banknote, ArrowLeftRight, NotebookPen, FileSpreadsheet, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { listVouchers } from "@/actions/accounting/vouchers"
@@ -8,9 +8,10 @@ import { VouchersTable } from "./vouchers-table"
 
 export const metadata: Metadata = { title: "Vouchers" }
 
-const TYPE_ICON = { RV: ReceiptText, PV: Banknote, CV: ArrowLeftRight, JV: NotebookPen } as const
+// BL = Bill Voucher (auto-issued by the billing module; no manual create button)
+const TYPE_ICON = { RV: ReceiptText, PV: Banknote, CV: ArrowLeftRight, JV: NotebookPen, BL: FileSpreadsheet } as const
 
-const VALID_TYPES = new Set(["RV", "PV", "CV", "JV"])
+const VALID_TYPES = new Set(["RV", "PV", "CV", "JV", "BL"])
 const VALID_STATUSES = new Set(["DRAFT", "POSTED", "REVERSED"])
 
 export default async function VouchersListPage({
@@ -19,7 +20,7 @@ export default async function VouchersListPage({
   searchParams: Promise<{ type?: string; status?: string }>
 }) {
   const sp = await searchParams
-  const typeFilter   = sp.type   && VALID_TYPES.has(sp.type)     ? (sp.type as "RV" | "PV" | "CV" | "JV") : undefined
+  const typeFilter   = sp.type   && VALID_TYPES.has(sp.type)     ? (sp.type as "RV" | "PV" | "CV" | "JV" | "BL") : undefined
   const statusFilter = sp.status && VALID_STATUSES.has(sp.status) ? (sp.status as "DRAFT" | "POSTED" | "REVERSED") : undefined
   const vouchers = await listVouchers({ type: typeFilter, status: statusFilter })
 
@@ -52,7 +53,7 @@ export default async function VouchersListPage({
       <div className="flex gap-3 flex-wrap items-center">
         <div className="flex gap-1.5 items-center">
           <span className="text-[10px] uppercase tracking-widest font-black text-slate-400">Type</span>
-          {["", "RV", "PV", "CV", "JV"].map(t => (
+          {["", "RV", "PV", "CV", "JV", "BL"].map(t => (
             <Link key={t || "ALL"} href={t ? `/accounting/vouchers?type=${t}${sp.status ? `&status=${sp.status}` : ""}` : `/accounting/vouchers${sp.status ? `?status=${sp.status}` : ""}`}>
               <Badge variant={(sp.type ?? "") === t ? "default" : "outline"} className="cursor-pointer text-[10px] font-bold uppercase tracking-widest">
                 {t || "ALL"}

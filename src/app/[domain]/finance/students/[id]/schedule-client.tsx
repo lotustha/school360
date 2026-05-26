@@ -4,13 +4,13 @@ import { useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
-import { Pencil, X, Sparkles, Plus, Ban, ReceiptText } from "lucide-react"
+import { Pencil, X, Sparkles, Plus, Ban, ReceiptText, FileMinus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { NepaliDateInput } from "@/components/ui/nepali-date-input"
 import {
-  editStudentFee, bulkEditStudentFees, createAdhocStudentFee, cancelStudentFee,
+  editStudentFee, bulkEditStudentFees, createAdhocStudentFee, cancelStudentFee, writeOffStudentFee,
   type StudentFeeRow,
 } from "@/actions/billing/student-fees"
 import { todayBS } from "@/lib/nepali-date"
@@ -138,30 +138,40 @@ export function ScheduleClient({ studentId, rows, heads, months, fiscalYears, ac
         </div>
       ) : (
         <div className="bg-white/70 backdrop-blur-xl rounded-2xl border border-white/40 shadow-sm overflow-hidden">
-          <table className="text-[11px] w-full table-fixed">
-            <colgroup>
-              <col className="w-[140px]" />
-              <col className="w-[58px]" />
-              {months.map(m => <col key={m.monthIndex} />)}
-            </colgroup>
-            <thead className="bg-slate-50/80 border-b border-slate-200">
-              <tr>
-                <th className="text-left px-2 py-1.5 font-black uppercase tracking-widest text-[9px] text-slate-500">Fee Head</th>
-                <th className="text-center px-1 py-1.5 font-black uppercase tracking-widest text-[9px] text-slate-500" title="Annual / One-time / Event charges">Annual</th>
-                {months.map(m => {
-                  const short = m.label.split(" ")[0].slice(0, 3)
-                  return (
-                    <th key={m.monthIndex} className="text-center px-0.5 py-1.5 font-black uppercase tracking-wide text-[9px] text-slate-500" title={m.label}>
-                      {short}
-                    </th>
-                  )
-                })}
-              </tr>
-            </thead>
+          <p className="md:hidden text-[10px] text-slate-500 px-3 py-1.5 border-b border-slate-100 bg-slate-50/60 flex items-center gap-1">
+            <span aria-hidden>↔</span> Scroll horizontally to see all months
+          </p>
+          <div className="overflow-x-auto [scrollbar-color:theme(colors.slate.300)_transparent]">
+            <table className="text-[11px] w-full table-fixed min-w-[760px]">
+              <colgroup>
+                <col className="w-[140px]" />
+                <col className="w-[58px]" />
+                {months.map(m => <col key={m.monthIndex} className="w-[58px]" />)}
+              </colgroup>
+              <thead className="bg-slate-50/80 border-b border-slate-200">
+                <tr>
+                  <th className="text-left px-2 py-1.5 font-black uppercase tracking-widest text-[9px] text-slate-500 sticky left-0 bg-slate-50/95 backdrop-blur-sm z-10">Fee Head</th>
+                  <th className="text-center px-1 py-1.5 font-black uppercase tracking-widest text-[9px] text-slate-500" title="Annual / One-time / Event charges">Annual</th>
+                  {months.map(m => {
+                    const short = m.label.split(" ")[0].slice(0, 3)
+                    return (
+                      <th
+                        key={m.monthIndex}
+                        scope="col"
+                        className="text-center px-0.5 py-1.5 font-black uppercase tracking-wide text-[9px] text-slate-500"
+                        title={m.label}
+                        aria-label={m.label}
+                      >
+                        {short}
+                      </th>
+                    )
+                  })}
+                </tr>
+              </thead>
             <tbody className="divide-y divide-slate-100">
               {headsInGrid.map(h => (
                 <tr key={h.id} className="hover:bg-slate-50/40">
-                  <td className="px-2 py-1.5 border-r border-slate-100" title={`${h.name} · ${h.frequency}`}>
+                  <td className="px-2 py-1.5 border-r border-slate-100 sticky left-0 bg-white/95 backdrop-blur-sm z-10" title={`${h.name} · ${h.frequency}`}>
                     <p className="font-bold text-slate-700 truncate text-[11px]">{h.name}</p>
                     <p className="text-[9px] uppercase tracking-widest font-black text-slate-400">{h.frequency}</p>
                   </td>
@@ -197,6 +207,7 @@ export function ScheduleClient({ studentId, rows, heads, months, fiscalYears, ac
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -255,9 +266,24 @@ function Cell({
   const isSel = selected.has(row.id)
   const isEditable = row.status !== "PAID" && row.status !== "CANCELLED"
   const hasDiscount = parseFloat(row.scholarshipPct) > 0
-  // Compact: drop the decimals to fit in narrow column (full amount shown on hover/edit)
-  const compactAmt = Math.round(parseFloat(row.finalAmount)).toString()
+  const final = parseFloat(row.finalAmount)
+  const paid  = parseFloat(row.paidAmount)
+  const outstanding = Math.max(0, final - paid)
+  const isPartial = row.status === "PARTIAL" && paid > 0 && paid < final
+  // Compact: drop the decimals to fit in narrow column (full amount shown on hover/edit).
+  // PARTIAL rows show the outstanding (what's still owed) as the headline number;
+  // everyone else shows the full bill amount.
+  const headline = isPartial ? Math.round(outstanding).toString() : Math.round(final).toString()
   const tone = row.isOverdue ? STATUS_TONE.OVERDUE ?? STATUS_TONE.BILLED : STATUS_TONE[row.status] ?? STATUS_TONE.PLANNED
+  // Status glyph — shape encodes status (in addition to colour) so colour-blind
+  // users have a non-colour signal. WCAG 1.4.1 (Use of Color).
+  const glyph = row.isOverdue ? "!"
+    : row.status === "PAID"      ? "✓"
+    : row.status === "PARTIAL"   ? "½"
+    : row.status === "BILLED"    ? "B"
+    : row.status === "CANCELLED" ? "✕"
+    :                              "·"  // PLANNED
+  const statusLabel = row.isOverdue ? "Overdue" : row.status.charAt(0) + row.status.slice(1).toLowerCase()
   return (
     <button
       type="button"
@@ -270,18 +296,24 @@ function Cell({
         isSel ? "ring-2 ring-primary border-primary/40 bg-primary/5" : tone,
         !isEditable && "opacity-75",
       )}
-      title={`${row.feeHeadName} · ${row.periodLabel} · Rs. ${row.finalAmount} · ${row.status}${row.isOverdue ? " (OVERDUE)" : ""} · Due ${row.dueDateBS}${row.scholarshipReason ? ` · ${row.scholarshipPct}% off (${row.scholarshipReason})` : ""}`}
+      aria-label={`${row.feeHeadName} ${row.periodLabel} Rs ${row.finalAmount} ${statusLabel}${row.isOverdue && row.status !== "PAID" ? " overdue" : ""}`}
+      title={`${row.feeHeadName} · ${row.periodLabel} · Rs. ${row.finalAmount}${isPartial ? ` (Rs. ${row.paidAmount} paid, Rs. ${outstanding.toFixed(2)} left)` : ""} · ${row.status}${row.isOverdue ? " (OVERDUE)" : ""} · Due ${row.dueDateBS}${row.scholarshipReason ? ` · ${row.scholarshipPct}% off (${row.scholarshipReason})` : ""}`}
     >
-      <div className="font-mono tabular-nums text-[10px] font-bold truncate">{compactAmt}</div>
-      <div className="flex items-center justify-center gap-0.5">
-        <span className={cn("inline-block w-1.5 h-1.5 rounded-full",
-          row.isOverdue ? "bg-rose-500"
-          : row.status === "PAID" ? "bg-emerald-500"
-          : row.status === "PARTIAL" ? "bg-sky-500"
-          : row.status === "BILLED" ? "bg-amber-500"
-          : row.status === "CANCELLED" ? "bg-slate-400"
-          : "bg-slate-300",
-        )} />
+      <div className="font-mono tabular-nums text-[10px] font-bold truncate">{headline}</div>
+      <div className="flex items-center justify-center gap-1">
+        <span aria-hidden className={cn("inline-flex items-center justify-center w-3 h-3 rounded-full text-[8px] font-black leading-none flex-shrink-0",
+          row.isOverdue ? "bg-rose-500 text-white"
+          : row.status === "PAID" ? "bg-emerald-500 text-white"
+          : row.status === "PARTIAL" ? "bg-sky-500 text-white"
+          : row.status === "BILLED" ? "bg-amber-500 text-white"
+          : row.status === "CANCELLED" ? "bg-slate-400 text-white"
+          : "bg-slate-300 text-slate-600",
+        )}>{glyph}</span>
+        {isPartial && (
+          <span className="text-[8px] font-mono font-bold text-sky-700 tabular-nums">
+            {Math.round(paid)}/{Math.round(final)}
+          </span>
+        )}
         {hasDiscount && <span className="text-[8px] font-black text-violet-700">-{Math.round(parseFloat(row.scholarshipPct))}%</span>}
       </div>
     </button>
@@ -342,6 +374,19 @@ function EditCellSheet({
     })
   }
 
+  function handleWriteOff() {
+    const balance = parseFloat(row.finalAmount) - parseFloat(row.paidAmount)
+    const r = prompt(`Write off Rs. ${balance.toFixed(2)} of unpaid balance — reason?`)
+    if (!r || !r.trim()) return
+    start(async () => {
+      try {
+        const res = await writeOffStudentFee(row.id, r.trim())
+        toast.success(`Written off Rs. ${res.writtenOffAmount}`)
+        onSaved()
+      } catch (e) { toast.error((e as Error).message) }
+    })
+  }
+
   return (
     <Backdrop onClose={onClose}>
       <Sheet title={`${row.feeHeadName} · ${row.periodLabel}`} onClose={onClose}>
@@ -381,9 +426,26 @@ function EditCellSheet({
         </Field>
 
         <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-          <Button variant="ghost" onClick={handleCancel} disabled={pending || row.status === "PAID" || parseFloat(row.paidAmount) > 0 || row.status === "CANCELLED"} className="text-rose-600 hover:bg-rose-50 cursor-pointer gap-1.5">
-            <Ban className="w-3.5 h-3.5" />Cancel charge
-          </Button>
+          <div className="flex gap-1">
+            <Button
+              variant="ghost"
+              onClick={handleCancel}
+              disabled={pending || row.status === "PAID" || parseFloat(row.paidAmount) > 0 || row.status === "CANCELLED"}
+              className="text-rose-600 hover:bg-rose-50 cursor-pointer gap-1.5"
+              title="Cancel a row that should never have been billed"
+            >
+              <Ban className="w-3.5 h-3.5" />Cancel
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={handleWriteOff}
+              disabled={pending || row.status === "PAID" || row.status === "CANCELLED" || row.status === "PLANNED"}
+              className="text-amber-700 hover:bg-amber-50 cursor-pointer gap-1.5"
+              title="Forgive the unpaid balance on a legitimate bill (uncollectable debt, hardship waiver)"
+            >
+              <FileMinus className="w-3.5 h-3.5" />Write off
+            </Button>
+          </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose} className="cursor-pointer">Close</Button>
             <Button onClick={handleSave} disabled={pending || !isEditable} className="cursor-pointer shadow-md shadow-primary/20">Save</Button>

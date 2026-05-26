@@ -10,7 +10,7 @@ import type { EvaluationRow } from "./evaluations-columns"
 
 export const metadata: Metadata = { title: "Evaluations" }
 
-type SP = { faculty?: string; year?: string }
+type SP = { faculty?: string; year?: string; class?: string }
 
 export default async function EvaluationsPage({
   params,
@@ -66,7 +66,14 @@ export default async function EvaluationsPage({
   const initialAcademicYearId =
     facultyYears.find(y => y.name === academicYearName)?.id ?? null
 
-  const evaluations = await listEvaluations({ schoolId: school.id, facultyId, academicYearName })
+  // Class filter is optional. When set we narrow the list to evaluations that
+  // include this class. The URL param can be the literal string "all" — treat
+  // that as "no class filter".
+  const classParam = sp.class
+  const classId    = classParam && classParam !== "all" && classes.some(c => c.id === classParam) ? classParam : undefined
+  const activeClass = classId ? classes.find(c => c.id === classId) ?? null : null
+
+  const evaluations = await listEvaluations({ schoolId: school.id, facultyId, academicYearName, classId })
 
   const rows: EvaluationRow[] = evaluations.map(ev => {
     const subjectsCount    = ev._count.subjectEvaluations
@@ -127,6 +134,7 @@ export default async function EvaluationsPage({
         academicYears={academicYears}
         defaultFacultyId={facultyId}
         defaultAcademicYearId={initialAcademicYearId}
+        activeClass={activeClass}
       />
     </div>
   )

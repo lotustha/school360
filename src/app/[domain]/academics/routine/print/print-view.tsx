@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { ArrowLeft, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { CompactGrid } from "../compact/compact-grid"
@@ -14,19 +15,95 @@ interface Props {
 }
 
 export function RoutinePrintView({ schoolName, scheduleName, columns, title }: Props) {
+  const router = useRouter()
   useEffect(() => {
     // Tiny delay so layout settles before the browser print dialog opens
     const t = setTimeout(() => window.print(), 350)
     return () => clearTimeout(t)
   }, [])
 
+  function handleClose() {
+    // window.close() silently fails when the tab wasn't opened via window.open()
+    // (typical when the user navigates here directly or refreshes). Fall back
+    // to navigating back; if that also has no history, send them to /compact.
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      router.back()
+    } else {
+      router.push("/academics/routine/compact")
+    }
+  }
+
   return (
     <>
       <style jsx global>{`
         @page {
           size: A4 landscape;
-          margin: 10mm 8mm 12mm 8mm;
+          margin: 8mm 6mm 10mm 6mm;
         }
+
+        /* ─── Print-fit styles applied on BOTH screen preview AND print ───
+           The /routine/print route is a WYSIWYG preview — what you see on
+           screen is exactly what comes out of the printer. */
+        .print-shell .max-w-\\[1400px\\] { max-width: 100% !important; }
+        .print-shell .max-h-\\[calc\\(100vh-280px\\)\\] {
+          max-height: none !important;
+          overflow: visible !important;
+        }
+        /* Kill ALL inner scroll containers so the whole routine is one
+           continuous, scroll-free render. Sticky headers won't survive
+           overflow:visible, but a print page doesn't need them anyway. */
+        .print-shell .overflow-auto,
+        .print-shell .overflow-x-auto,
+        .print-shell .overflow-y-auto,
+        .print-shell .overflow-scroll {
+          overflow: visible !important;
+          max-height: none !important;
+          max-width: 100% !important;
+        }
+        .print-shell .sticky {
+          position: static !important;
+        }
+        .print-shell .backdrop-blur-xl { backdrop-filter: none !important; }
+        /* Hide the per-schedule "Print" button rendered inside CompactGrid —
+           irrelevant on a route that's already the print view. */
+        .print-shell button[title^="Print"] {
+          display: none !important;
+        }
+        .print-shell table {
+          font-size: 7pt;
+          width: 100%;
+          table-layout: fixed;
+          min-width: 0;
+        }
+        .print-shell th, .print-shell td {
+          min-width: 0;
+          padding: 3px 4px;
+          word-break: break-word;
+          overflow-wrap: break-word;
+          border-color: #475569;
+        }
+        .print-shell th:first-child,
+        .print-shell td:first-child {
+          width: 12%;
+          min-width: 0;
+        }
+        .print-shell .text-\\[11px\\],
+        .print-shell .text-\\[10px\\],
+        .print-shell .text-\\[9px\\] {
+          font-size: 6.5pt;
+          line-height: 1.15;
+        }
+        .print-shell .text-\\[12px\\] {
+          font-size: 7.5pt;
+          line-height: 1.15;
+        }
+
+        /* Screen preview: paper-like background so users can see the page edge */
+        .print-shell {
+          background: #f8fafc;
+          padding: 16px;
+        }
+
         @media print {
           .no-print { display: none !important; }
           html, body { background: white !important; }
@@ -42,17 +119,15 @@ export function RoutinePrintView({ schoolName, scheduleName, columns, title }: P
             box-shadow: none !important;
           }
           main { padding: 0 !important; background: white !important; }
-          .print-shell { background: white !important; box-shadow: none !important; padding: 0 !important; max-width: 100% !important; }
-          /* Strip glass effects on the grid */
-          .print-shell table { font-size: 8.5pt !important; }
+          .print-shell {
+            background: white !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            max-width: 100% !important;
+          }
           .print-shell thead { display: table-header-group; }
           .print-shell tr     { page-break-inside: avoid; }
-          .print-shell .max-h-\\[calc\\(100vh-280px\\)\\] { max-height: none !important; overflow: visible !important; }
-          .print-shell .backdrop-blur-xl { backdrop-filter: none !important; }
-          .print-shell th, .print-shell td { border-color: #475569 !important; }
         }
-        /* On screen: keep readable */
-        .print-shell { background: #f8fafc; padding: 16px; }
       `}</style>
 
       {/* Floating no-print toolbar */}
@@ -62,7 +137,7 @@ export function RoutinePrintView({ schoolName, scheduleName, columns, title }: P
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => window.close()}
+              onClick={handleClose}
               className="gap-1.5 text-xs cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" /> Close

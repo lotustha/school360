@@ -2,7 +2,7 @@ import { Metadata } from "next"
 import { notFound } from "next/navigation"
 import { CalendarRange } from "lucide-react"
 import { prisma } from "@/lib/prisma"
-import { listExams } from "@/actions/exams"
+import { listExamsWithProgress } from "@/actions/exams"
 import { sortClassesByFacultyThenName } from "@/lib/class-sort"
 import { ExamsClient } from "./exams-client"
 
@@ -13,8 +13,8 @@ export default async function ExamsPage({ params }: { params: Promise<{ domain: 
   const school = await prisma.school.findUnique({ where: { slug: domain } })
   if (!school) notFound()
 
-  const [exams, academicYears, faculties, rawClasses] = await Promise.all([
-    listExams(school.id),
+  const [{ exams, progress }, academicYears, faculties, rawClasses] = await Promise.all([
+    listExamsWithProgress(school.id),
     prisma.academicYear.findMany({
       where:   { schoolId: school.id },
       select:  { id: true, name: true, isCurrent: true, facultyId: true, startDateBS: true },
@@ -58,6 +58,7 @@ export default async function ExamsPage({ params }: { params: Promise<{ domain: 
       <ExamsClient
         schoolId={school.id}
         initialExams={exams}
+        initialProgress={Array.from(progress.values())}
         academicYears={academicYears}
         faculties={faculties}
         classes={classes}

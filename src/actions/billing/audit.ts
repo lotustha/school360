@@ -32,13 +32,15 @@ export async function writeAuditEntry(tx: Tx, e: AuditEntry): Promise<void> {
 }
 
 const BILLING_ENTITIES = [
-  "FeeHead", "FeePlan", "PlanItem", "StudentFee", "FeePaymentAllocation",
+  "FeeHead", "FeePlan", "PlanItem", "StudentFee", "FeePaymentAllocation", "Voucher",
 ] as const
 
 export interface AuditFilters {
   entity?: string
   action?: string
   userId?: string
+  fromAt?: Date
+  toAt?:   Date
   limit?:  number
 }
 
@@ -51,9 +53,15 @@ export async function listBillingAuditLog(filters: AuditFilters = {}) {
       entity:   filters.entity ?? { in: [...BILLING_ENTITIES] },
       ...(filters.action && { action: filters.action }),
       ...(filters.userId && { userId: filters.userId }),
+      ...((filters.fromAt || filters.toAt) && {
+        at: {
+          ...(filters.fromAt && { gte: filters.fromAt }),
+          ...(filters.toAt   && { lte: filters.toAt }),
+        },
+      }),
     },
     orderBy: { at: "desc" },
-    take: filters.limit ?? 200,
+    take: filters.limit ?? 500,
   })
   return rows
 }

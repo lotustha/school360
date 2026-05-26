@@ -2,14 +2,14 @@
 
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
-import { motion } from "framer-motion"
-import { ClipboardCheck, BookOpenCheck, Award } from "lucide-react"
+import { ClipboardCheck, BookOpenCheck, Award, FileBarChart } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const tabs = [
-  { title: "Evaluations", href: "/academics/evaluations",            icon: ClipboardCheck, match: (p: string) => p === "/academics/evaluations" || (p.startsWith("/academics/evaluations/") && !p.includes("/ledger") && !p.includes("/transcript")) },
+  { title: "Evaluations", href: "/academics/evaluations",            icon: ClipboardCheck, match: (p: string) => p === "/academics/evaluations" || (p.startsWith("/academics/evaluations/") && !p.includes("/ledger") && !p.includes("/transcript") && !p.includes("/reports")) },
   { title: "Class Ledger", href: "/academics/evaluations/ledger",    icon: BookOpenCheck,  match: (p: string) => p.startsWith("/academics/evaluations/ledger") },
   { title: "Transcripts",  href: "/academics/evaluations/transcript",icon: Award,          match: (p: string) => p.startsWith("/academics/evaluations/transcript") },
+  { title: "Reports",      href: "/academics/evaluations/reports",   icon: FileBarChart,   match: (p: string) => p.startsWith("/academics/evaluations/reports") },
 ]
 
 export function EvaluationTabs() {
@@ -30,21 +30,19 @@ export function EvaluationTabs() {
       {tabs.map(t => {
         const isActive = t.match(relative)
         return (
-          <Link key={t.title} href={`${t.href}${suffix}`} className="relative">
-            {isActive && (
-              <motion.div
-                layoutId="evaluation-tabs-pill"
-                className="absolute inset-0 bg-primary rounded-lg shadow-sm"
-                transition={{ type: "spring", stiffness: 380, damping: 35 }}
-              />
+          <Link
+            key={t.title}
+            href={`${t.href}${suffix}`}
+            aria-current={isActive ? "page" : undefined}
+            className={cn(
+              "flex items-center gap-1.5 px-3.5 py-2 text-sm rounded-lg transition-colors duration-150 whitespace-nowrap cursor-pointer",
+              isActive
+                ? "bg-primary text-primary-foreground font-semibold shadow-sm shadow-primary/40"
+                : "font-medium text-muted-foreground hover:text-foreground hover:bg-slate-100/70",
             )}
-            <span className={cn(
-              "relative z-10 flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium rounded-lg transition-colors duration-150 whitespace-nowrap cursor-pointer",
-              isActive ? "text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-            )}>
-              <t.icon className="w-3.5 h-3.5" />
-              {t.title}
-            </span>
+          >
+            <t.icon className="w-3.5 h-3.5" />
+            {t.title}
           </Link>
         )
       })}

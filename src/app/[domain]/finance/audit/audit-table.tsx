@@ -19,13 +19,15 @@ export interface AuditRow {
 }
 
 const ACTION_COLOR: Record<string, string> = {
-  CREATE:  "bg-emerald-50 text-emerald-700 border-emerald-200",
-  UPDATE:  "bg-sky-50    text-sky-700    border-sky-200",
-  DELETE:  "bg-rose-50   text-rose-700   border-rose-200",
-  CANCEL:  "bg-amber-50  text-amber-700  border-amber-200",
-  APPROVE: "bg-violet-50 text-violet-700 border-violet-200",
-  POST:    "bg-emerald-50 text-emerald-700 border-emerald-200",
-  REVERSE: "bg-amber-50  text-amber-700  border-amber-200",
+  CREATE:      "bg-emerald-50 text-emerald-700 border-emerald-200",
+  UPDATE:      "bg-sky-50     text-sky-700     border-sky-200",
+  DELETE:      "bg-rose-50    text-rose-700    border-rose-200",
+  CANCEL:      "bg-amber-50   text-amber-700   border-amber-200",
+  WRITE_OFF:   "bg-amber-50   text-amber-800   border-amber-300",
+  APPROVE:     "bg-violet-50  text-violet-700  border-violet-200",
+  POST:        "bg-emerald-50 text-emerald-700 border-emerald-200",
+  REVERSE:     "bg-rose-50    text-rose-700    border-rose-200",
+  BILL_PERIOD: "bg-primary/10 text-primary     border-primary/20",
 }
 
 export function AuditLogTable({ rows }: { rows: AuditRow[] }) {
@@ -85,16 +87,22 @@ export function AuditLogTable({ rows }: { rows: AuditRow[] }) {
       id: "details",
       header: "",
       enableHiding: false,
-      cell: ({ row }) => (
-        <button
-          type="button"
-          onClick={() => setOpen(o => o === row.original.id ? null : row.original.id)}
-          className="text-xs text-primary hover:underline font-bold cursor-pointer inline-flex items-center gap-1"
-        >
-          <ChevronRight className={cn("w-3 h-3 transition-transform", open === row.original.id && "rotate-90")} />
-          Details
-        </button>
-      ),
+      cell: ({ row }) => {
+        const isOpen = open === row.original.id
+        return (
+          <button
+            type="button"
+            onClick={() => setOpen(o => o === row.original.id ? null : row.original.id)}
+            aria-expanded={isOpen}
+            aria-controls={`audit-detail-${row.original.id}`}
+            aria-label={isOpen ? "Hide audit details" : "Show audit details"}
+            className="text-xs text-primary hover:underline font-bold cursor-pointer inline-flex items-center gap-1"
+          >
+            <ChevronRight className={cn("w-3 h-3 transition-transform", isOpen && "rotate-90")} />
+            Details
+          </button>
+        )
+      },
     },
   ]
 
@@ -112,21 +120,26 @@ export function AuditLogTable({ rows }: { rows: AuditRow[] }) {
         storageKey="billing-audit"
       />
       {selected && (
-        <div className="border-t border-slate-100/80 px-5 py-4 bg-slate-50/40 grid sm:grid-cols-2 gap-4 text-xs">
+        <div id={`audit-detail-${selected.id}`} role="region" aria-label="Audit entry details" className="border-t border-slate-100/80 px-5 py-4 bg-slate-50/40 grid sm:grid-cols-2 gap-4 text-xs">
           <div>
             <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1.5">Before</p>
             <pre className="bg-white/70 border border-slate-200 rounded-lg p-3 overflow-auto max-h-64 font-mono text-[11px]">
-              {selected.before ? JSON.stringify(selected.before, null, 2) : <span className="text-slate-400 italic">— (no prior state recorded)</span>}
+              {selected.before ? safeJson(selected.before) : <span className="text-slate-400 italic">— (no prior state recorded)</span>}
             </pre>
           </div>
           <div>
             <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1.5">After</p>
             <pre className="bg-white/70 border border-slate-200 rounded-lg p-3 overflow-auto max-h-64 font-mono text-[11px]">
-              {selected.after ? JSON.stringify(selected.after, null, 2) : <span className="text-slate-400 italic">—</span>}
+              {selected.after ? safeJson(selected.after) : <span className="text-slate-400 italic">—</span>}
             </pre>
           </div>
         </div>
       )}
     </div>
   )
+}
+
+function safeJson(value: unknown): string {
+  try { return JSON.stringify(value, null, 2) }
+  catch { return "[unable to serialize — likely a circular reference]" }
 }

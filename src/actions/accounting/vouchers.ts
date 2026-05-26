@@ -328,6 +328,56 @@ export async function reverseVoucher(id: string, reversalNarration?: string) {
     // Mark source as REVERSED for visibility (not strictly necessary for math).
     await tx.voucher.update({ where: { id }, data: { status: "REVERSED" } })
 
+    // If this voucher backs a fee bill (BL), unwind the StudentFee row's
+    // BILLED state back to PLANNED — but only if no payment has been applied.
+    // (Payments must be reversed first; we can't unbill a row that has cash
+    // against it without invalidating receipts.)
+    if (src.type === "BL") {
+      const billedRows = await tx.studentFee.findMany({
+        where:  { billVoucherId: id, schoolId: src.schoolId },
+        select: { id: true, paidAmount: true, periodLabel: true },
+      })
+      for (const r of billedRows) {
+        if (r.paidAmount.greaterThan(0)) {
+          throw new Error(`Cannot reverse bill — row "${r.periodLabel}" has payment applied. Reverse the receipt first.`)
+        }
+      }
+      await tx.studentFee.updateMany({
+        where: { id: { in: billedRows.map(r => r.id) } },
+        data:  { status: "PLANNED", billVoucherNumber: null, billVoucherId: null },
+      })
+    }
+
+    // If this voucher backs a fee receipt (RV with a linked FeePayment), roll
+    // back the student-fee bookkeeping so the GL reversal stays consistent with
+    // the StudentFee paidAmount / status state.
+    if (src.type === "RV") {
+      const fp = await tx.feePayment.findFirst({
+        where:   { voucherId: id, schoolId: src.schoolId },
+        include: { lines: { select: { id: true } } },
+      })
+      if (fp) {
+        const allocations = await tx.feePaymentAllocation.findMany({
+          where: { feePaymentId: fp.id },
+          include: { studentFee: true },
+        })
+        for (const alloc of allocations) {
+          const sf = alloc.studentFee
+          const nextPaid = sf.paidAmount.minus(alloc.amount)
+          const nextStatus = nextPaid.lessThanOrEqualTo(0)
+            ? (sf.billVoucherNumber ? "BILLED" : "PLANNED")  // billed remains billed even after payment is reversed
+            : "PARTIAL"
+          await tx.studentFee.update({
+            where: { id: sf.id },
+            data:  { paidAmount: nextPaid.lessThan(0) ? new Prisma.Decimal(0) : nextPaid, status: nextStatus },
+          })
+        }
+        // Allocations rolled back — keep the FeePayment + Lines as audit record,
+        // but unwind the allocations themselves so they don't double-count.
+        await tx.feePaymentAllocation.deleteMany({ where: { feePaymentId: fp.id } })
+      }
+    }
+
     await tx.auditLog.create({
       data: {
         schoolId: src.schoolId,

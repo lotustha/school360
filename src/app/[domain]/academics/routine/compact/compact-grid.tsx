@@ -1,14 +1,15 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { FolderTree, Building2, CalendarClock, Printer } from "lucide-react"
+import { FolderTree, Building2, CalendarClock, Printer, ArrowDownAZ, ArrowUpAZ } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { subjectShort, teacherInitials } from "@/lib/routine-format"
 import { dayDisplayNumber } from "@/lib/working-days"
 import type {
   CompactClassColumn, CompactCellEntry,
 } from "@/actions/routine"
+import { QuickAssignPopover, type QuickAssignTarget } from "./quick-assign-popover"
 
 interface Props {
   columns: CompactClassColumn[]
@@ -25,13 +26,20 @@ interface PeriodAxisItem {
 // ─── Top-level: split by schedule first, then render one grid per schedule ──
 
 export function CompactGrid({ columns }: Props) {
+  const [quickTarget, setQuickTarget] = useState<QuickAssignTarget | null>(null)
+  /** Server returns classes in ascending progression. User can flip to desc here. */
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
+  const orderedColumns = useMemo(
+    () => sortDir === "asc" ? columns : [...columns].reverse(),
+    [columns, sortDir],
+  )
   const scheduleGroups = useMemo(() => {
     const map = new Map<string, {
       scheduleId:   string | null
       scheduleName: string | null
       classes:      CompactClassColumn[]
     }>()
-    for (const c of columns) {
+    for (const c of orderedColumns) {
       const key = c.periodScheduleId ?? "_NONE_"
       if (!map.has(key)) {
         map.set(key, {
@@ -48,7 +56,7 @@ export function CompactGrid({ columns }: Props) {
       if (a.scheduleId && !b.scheduleId) return -1
       return (a.scheduleName ?? "").localeCompare(b.scheduleName ?? "")
     })
-  }, [columns])
+  }, [orderedColumns])
 
   if (columns.length === 0) {
     return (
@@ -70,8 +78,14 @@ export function CompactGrid({ columns }: Props) {
           scheduleName={g.scheduleName}
           classes={g.classes}
           showHeading={scheduleGroups.length > 1}
+          onQuickAssign={setQuickTarget}
+          sortDir={sortDir}
+          onToggleSort={() => setSortDir(d => d === "asc" ? "desc" : "asc")}
         />
       ))}
+      {quickTarget && (
+        <QuickAssignPopover target={quickTarget} onClose={() => setQuickTarget(null)} />
+      )}
     </div>
   )
 }
@@ -79,12 +93,15 @@ export function CompactGrid({ columns }: Props) {
 // ─── One grid per Period Schedule ──────────────────────────────────────────
 
 function ScheduleSection({
-  scheduleId, scheduleName, classes, showHeading,
+  scheduleId, scheduleName, classes, showHeading, onQuickAssign, sortDir, onToggleSort,
 }: {
   scheduleId:   string | null
   scheduleName: string | null
   classes:      CompactClassColumn[]
   showHeading:  boolean
+  onQuickAssign: (target: QuickAssignTarget) => void
+  sortDir:       "asc" | "desc"
+  onToggleSort:  () => void
 }) {
   const searchParams = useSearchParams()
 
@@ -186,28 +203,44 @@ function ScheduleSection({
           </p>
         </div>
       ) : (
-        <div className="bg-white/70 backdrop-blur-xl rounded-xl border border-white/40 shadow-sm overflow-auto max-h-[calc(100vh-280px)]">
-          <table className="border-separate border-spacing-0 text-xs min-w-full">
+        <div className="bg-white/70 backdrop-blur-xl rounded-xl border border-white/40 shadow-sm overflow-x-auto">
+          <table className="border-separate border-spacing-0 text-xs w-full table-fixed">
+            <colgroup>
+              <col className="w-[110px]" />
+              {periodAxis.map(p => <col key={p.orderIndex} />)}
+            </colgroup>
             <thead className="sticky top-0 z-30">
               <tr className="bg-slate-50/95 backdrop-blur-xl">
-                <th className="sticky left-0 z-40 bg-slate-50/95 border-b border-r border-slate-200 px-3 py-3 min-w-[120px] text-left">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Class</span>
+                <th className="sticky left-0 z-40 bg-slate-50/95 border-b border-r border-slate-200 px-2 py-3 text-left">
+                  <button
+                    type="button"
+                    onClick={onToggleSort}
+                    title={sortDir === "asc"
+                      ? "Sorted by class progression (ECD → 1 → 12). Click to reverse."
+                      : "Sorted by reverse progression (12 → 1 → ECD). Click to reset."}
+                    className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-primary cursor-pointer rounded px-1 py-0.5 hover:bg-primary/8 transition-colors"
+                  >
+                    Class
+                    {sortDir === "asc"
+                      ? <ArrowDownAZ className="w-3 h-3" aria-label="Ascending" />
+                      : <ArrowUpAZ className="w-3 h-3" aria-label="Descending" />}
+                  </button>
                 </th>
                 {periodAxis.map(p => (
                   <th key={p.orderIndex}
                     className={cn(
-                      "px-2.5 py-2 border-b border-l border-slate-200 min-w-[150px] align-top",
+                      "px-1.5 py-2 border-b border-l border-slate-200 align-top",
                       p.isBreak ? "bg-amber-50/60" : "",
                     )}>
                     <div className={cn(
-                      "text-[11px] font-bold leading-tight",
+                      "text-[11px] font-bold leading-tight truncate",
                       p.isBreak ? "text-amber-700" : "text-slate-700",
-                    )}>
+                    )} title={p.label ?? `P${p.orderIndex + 1}`}>
                       {p.label ?? `P${p.orderIndex + 1}`}
                     </div>
                     {(p.startTime || p.endTime) && (
-                      <div className="mt-0.5 text-[10px] font-mono text-slate-400 tabular-nums">
-                        {p.startTime ?? "—"} – {p.endTime ?? "—"}
+                      <div className="mt-0.5 text-[9px] font-mono text-slate-400 tabular-nums truncate">
+                        {p.startTime ?? "—"}–{p.endTime ?? "—"}
                       </div>
                     )}
                   </th>
@@ -223,6 +256,7 @@ function ScheduleSection({
                   classes={g.classes}
                   periodAxis={periodAxis}
                   totalCols={totalCols}
+                  onQuickAssign={onQuickAssign}
                 />
               ))}
             </tbody>
@@ -236,12 +270,13 @@ function ScheduleSection({
 // ─── Faculty band + class rows ──────────────────────────────────────────────
 
 function FacultyGroup({
-  facultyName, classes, periodAxis, totalCols,
+  facultyName, classes, periodAxis, totalCols, onQuickAssign,
 }: {
   facultyName: string | null
   classes:     CompactClassColumn[]
   periodAxis:  PeriodAxisItem[]
   totalCols:   number
+  onQuickAssign: (target: QuickAssignTarget) => void
 }) {
   return (
     <>
@@ -265,7 +300,7 @@ function FacultyGroup({
       </tr>
       {classes.map((c, rowIdx) => (
         <tr key={c.classId} className={rowIdx % 2 === 0 ? "bg-white/30" : "bg-slate-50/20"}>
-          <th className="sticky left-0 z-10 bg-white/95 backdrop-blur-xl border-b border-r border-slate-100 px-3 py-2 align-middle text-left min-w-[120px]">
+          <th className="sticky left-0 z-10 bg-white/95 backdrop-blur-xl border-b border-r border-slate-100 px-2 py-2 align-middle text-left">
             <div className="flex flex-col gap-0.5">
               <code className="text-[12px] font-mono font-black text-emerald-700 leading-tight">
                 {c.classShortName}
@@ -277,11 +312,21 @@ function FacultyGroup({
           </th>
           {periodAxis.map(p => {
             const row = c.rows.find(r => r.orderIndex === p.orderIndex)
+            const isBreak = !!(row?.isBreak || p.isBreak)
             return (
               <td key={p.orderIndex}
+                onDoubleClick={isBreak ? undefined : () => onQuickAssign({
+                  classId:      c.classId,
+                  className:    c.className,
+                  classShort:   c.classShortName,
+                  periodSlotId: row?.slotId ?? p.orderIndex.toString(),
+                  periodLabel:  `${p.label ?? `P${p.orderIndex + 1}`}${p.startTime ? ` (${p.startTime}${p.endTime ? "–" + p.endTime : ""})` : ""}`,
+                })}
+                title={isBreak ? undefined : "Double-click to quick-assign a subject"}
                 className={cn(
-                  "border-b border-l border-slate-100 align-top px-1.5 py-1.5 min-w-[150px]",
+                  "border-b border-l border-slate-100 align-top px-1 py-1",
                   p.isBreak && "bg-amber-50/30",
+                  !isBreak && "cursor-pointer hover:bg-primary/5 transition-colors select-none",
                 )}>
                 {row?.isBreak || p.isBreak ? (
                   <span className="text-[10px] text-amber-600/70 italic">—</span>
@@ -316,7 +361,7 @@ function CompactCellRow({ cell }: { cell: CompactCellEntry }) {
     : "—"
   return (
     <div
-      className="text-[11px] leading-snug whitespace-normal break-words"
+      className="text-[10px] leading-tight whitespace-normal break-words"
       title={[
         cell.teacherName,
         cell.subjectName,
@@ -327,9 +372,9 @@ function CompactCellRow({ cell }: { cell: CompactCellEntry }) {
       <span className="text-slate-400 mx-0.5">-</span>
       <span className="font-semibold text-emerald-700">{subj}</span>
       {cell.studentGroupName && (
-        <span className="ml-1 text-[9px] font-bold text-violet-600 align-top">★</span>
+        <span className="ml-0.5 text-[9px] font-bold text-violet-600 align-top">★</span>
       )}
-      <span className="ml-0.5 text-[10px] font-mono text-slate-400 tabular-nums">({dayNums})</span>
+      <span className="ml-0.5 text-[9px] font-mono text-slate-400 tabular-nums">({dayNums})</span>
     </div>
   )
 }

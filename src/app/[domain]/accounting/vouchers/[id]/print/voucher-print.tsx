@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect } from "react"
-import { ArrowLeft, Printer } from "lucide-react"
+import { ArrowLeft, Printer, AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { VOUCHER_TYPE_LABEL, type VoucherType } from "@/lib/accounting"
 import { formatBS } from "@/lib/nepali-date"
@@ -139,7 +139,9 @@ export function VoucherPrintView({ schoolName, schoolAddress, schoolPan, voucher
           </div>
 
           {voucher.status === "REVERSED" && (
-            <div className="mt-6 text-center text-rose-700 font-black uppercase tracking-widest text-xs">⚠ This voucher has been reversed</div>
+            <div className="mt-6 text-center text-rose-700 font-black uppercase tracking-widest text-xs inline-flex items-center justify-center gap-1.5 w-full">
+              <AlertTriangle className="w-3.5 h-3.5" /> This voucher has been reversed
+            </div>
           )}
         </div>
       </div>

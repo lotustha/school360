@@ -40,7 +40,7 @@ export function TranscriptDocument({ transcript: t, pageBreakAfter = false }: Pr
       {extraSubjects.length > 0 && (
         <ExtraSubjectsTable isFinal={isFinal} subjects={extraSubjects} />
       )}
-      <SignatureFooter />
+      <SignatureFooter publishAt={t.evaluation.publishAt} />
       <NotesRow />
     </article>
   )
@@ -308,12 +308,16 @@ function ExtraSubjectsTable({ isFinal, subjects }: { isFinal: boolean; subjects:
 
 // ─── Signature footer ──────────────────────────────────────────────────────
 
-function SignatureFooter() {
+function SignatureFooter({ publishAt }: { publishAt: Date | null }) {
+  // When the evaluation has been Published, print that as the official issue
+  // date on the grade sheet. Falls back to today's BS date for drafts.
+  const issueBS = publishAt ? bsFromDate(publishAt) : todayBS()
+  const label   = publishAt ? "Date of Publication" : "Date of Issue"
   return (
     <footer className="mt-8">
       <div className="grid grid-cols-2 gap-x-12 text-sm">
         <p className="py-1">PREPARED BY: ...........................................</p>
-        <p className="py-1 text-right">Date of Issue: {todayBS()}</p>
+        <p className="py-1 text-right">{label}: {issueBS}</p>
         <p className="py-1">CLASS TEACHER: ........................................</p>
         <p className="py-1 text-right">HEAD TEACHER: ........................................</p>
       </div>
@@ -323,6 +327,10 @@ function SignatureFooter() {
 
 function todayBS(): string {
   try { return toBS(new Date()) } catch { return "" }
+}
+
+function bsFromDate(d: Date): string {
+  try { return toBS(d) } catch { return "" }
 }
 
 // ─── Notes row ─────────────────────────────────────────────────────────────

@@ -12,6 +12,8 @@ import { getBalanceSheet } from "@/actions/accounting/reports"
 import { listFiscalYears, getCurrentFiscalYear } from "@/actions/accounting/fiscal-years"
 import { formatBS, todayBS } from "@/lib/nepali-date"
 import { ReportExportButton } from "@/components/accounting/report-export-button"
+import { ReportDateField } from "@/components/accounting/report-date-field"
+import { FyBadge } from "@/components/accounting/fy-badge"
 import { ReportKpi, BalancedBadge } from "@/components/accounting/report-shell"
 
 export const metadata: Metadata = { title: "Balance Sheet" }
@@ -50,11 +52,7 @@ export default async function BalanceSheetPage({
         <div>
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <h1 className="text-2xl font-bold tracking-tight">Balance Sheet</h1>
-            {activeFy && (
-              <Badge variant="outline" className="text-[10px] font-black uppercase tracking-widest bg-slate-100 text-slate-600 border-slate-200">
-                FY {activeFy.name}
-              </Badge>
-            )}
+            {activeFy && <FyBadge fyName={activeFy.name} status={activeFy.status} />}
             <BalancedBadge balanced={bs.balanced} dr={bs.totalAssets} cr={bs.totalLiabilitiesAndEquity} />
           </div>
           <p className="text-xs text-muted-foreground inline-flex items-center gap-1.5 flex-wrap">
@@ -85,13 +83,7 @@ export default async function BalanceSheetPage({
         </div>
         <div>
           <label className="text-[10px] uppercase tracking-widest font-black text-slate-500 mb-1.5 block">As of (BS)</label>
-          <input
-            name="asOf"
-            type="text"
-            defaultValue={sp.asOf ?? ""}
-            placeholder={activeFy?.endBS}
-            className="w-full h-11 px-3 bg-white/75 border border-slate-200 rounded-lg text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/15 font-mono"
-          />
+          <ReportDateField name="asOf" defaultValue={sp.asOf ?? ""} placeholder={activeFy?.endBS} />
         </div>
         <Button type="submit" className="h-11 cursor-pointer">Apply</Button>
       </form>

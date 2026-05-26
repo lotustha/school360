@@ -4,17 +4,36 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
-  ClipboardCheck, GraduationCap, Hash, Save, X, Layers, CalendarRange, BookOpen, Check,
+  ClipboardCheck, GraduationCap, Hash, Save, X, Layers, CalendarRange, BookOpen, Check, Eye,
 } from "lucide-react"
+import { NepaliDateInput } from "@/components/ui/nepali-date-input"
+import { toBS, toAD } from "@/lib/nepali-date"
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/searchable-select"
 import { createEvaluation, updateEvaluation } from "@/actions/evaluations"
 import { EVALUATION_BANDS, EVALUATION_BAND_RECIPES, type BandKey, type BandRecipe } from "@/lib/evaluation-bands"
+import { naturalCompare } from "@/lib/class-sort"
 import { cn } from "@/lib/utils"
+
+// Common evaluation names. Picking one also pre-fills sequence number and the
+// final-result toggle so the form is fully usable after a single click.
+// Users can still type any custom name — SearchableSelect's allowFreeText.
+interface EvalNamePreset extends SearchableSelectOption {
+  sequenceNumber: number
+  isFinal:        boolean
+}
+const EVAL_NAME_PRESETS: EvalNamePreset[] = [
+  { value: "First Terminal Examination",  label: "First Terminal Examination",  hint: "Seq 1 · Interim",  sequenceNumber: 1, isFinal: false },
+  { value: "Second Terminal Examination", label: "Second Terminal Examination", hint: "Seq 2 · Interim",  sequenceNumber: 2, isFinal: false },
+  { value: "Third Terminal Examination",  label: "Third Terminal Examination",  hint: "Seq 3 · Interim",  sequenceNumber: 3, isFinal: false },
+  { value: "Pre-Board Examination",       label: "Pre-Board Examination",       hint: "Seq 4 · Mock",     sequenceNumber: 4, isFinal: false },
+  { value: "Final Examination",           label: "Final Examination",           hint: "Seq 5 · Final",    sequenceNumber: 5, isFinal: true  },
+]
 
 type ClassOpt        = { id: string; name: string; facultyId: string | null }
 type FacultyOpt      = { id: string; name: string }
@@ -29,6 +48,7 @@ export type EvaluationFormValue = {
   academicYearId: string
   facultyId:      string | null  // inferred from first class (for prefill)
   isFinal:        boolean
+  publishAt:      Date | null
 }
 
 interface Props {
@@ -76,7 +96,16 @@ export function EvaluationFormSheet({
   const [bandKey,        setBandKey]        = useState<BandKey | null>(initialBandKey)
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>(editing?.classIds ?? [])
   const [isFinal,        setIsFinal]        = useState(editing?.isFinal ?? false)
-  const [autoSeed,       setAutoSeed]       = useState(false)
+  // Default ON when creating — most users want subjects pre-seeded so the
+  // evaluation is immediately gradable. They can untick it for a blank shell.
+  const [autoSeed,       setAutoSeed]       = useState(!editing)
+  // Publish date — stored as BS string in the form; converted back to AD on save.
+  // Empty = draft (not yet published).
+  const [publishBS, setPublishBS] = useState<string>(() => {
+    if (!editing?.publishAt) return ""
+    try { return toBS(editing.publishAt instanceof Date ? editing.publishAt : new Date(editing.publishAt)) }
+    catch { return "" }
+  })
   const [pending, startT] = useTransition()
 
   const facultyValue: string | null = facultyKey === NONE_FACULTY ? null : facultyKey
@@ -97,11 +126,12 @@ export function EvaluationFormSheet({
     setAcademicYearId(latest?.id ?? "")
   }, [facultyKey, filteredYears, isEdit])
 
-  // Classes filtered by faculty
+  // Classes filtered by faculty, sorted naturally so "Class 2" lands before
+  // "Class 10" instead of after.
   const filteredClasses = useMemo(() => {
-    return classes.filter(c =>
-      facultyValue === null ? c.facultyId === null : c.facultyId === facultyValue,
-    )
+    return classes
+      .filter(c => facultyValue === null ? c.facultyId === null : c.facultyId === facultyValue)
+      .sort((a, b) => naturalCompare(a.name, b.name))
   }, [classes, facultyValue])
 
   function toggleClass(id: string) {
@@ -120,10 +150,22 @@ export function EvaluationFormSheet({
     if (!band) return
     setBandKey(band.key)
     setDescription(band.value)
+    // The schema dictates which classes are covered — replace the selection
+    // with the matching classes so picking "Grade 6 to 8" resets to just
+    // grades 6–8, not adds to whatever was already ticked. CUSTOM has no
+    // matcher and leaves the existing selection alone.
     if (band.matches) {
-      const autoPicked = filteredClasses.filter(c => band.matches!(c.name)).map(c => c.id)
-      // Add to existing selection (don't overwrite unrelated choices)
-      setSelectedClassIds(prev => Array.from(new Set([...prev, ...autoPicked])))
+      const matched = filteredClasses.filter(c => band.matches!(c.name)).map(c => c.id)
+      setSelectedClassIds(matched)
+    }
+  }
+
+  function pickName(v: string) {
+    setName(v)
+    const preset = EVAL_NAME_PRESETS.find(p => p.value === v)
+    if (preset) {
+      setSeq(String(preset.sequenceNumber))
+      setIsFinal(preset.isFinal)
     }
   }
 
@@ -139,6 +181,13 @@ export function EvaluationFormSheet({
     if (!academicYearId)               { toast.error("Pick a session");        return }
     if (selectedClassIds.length === 0) { toast.error("Pick at least one class"); return }
 
+    // Resolve the BS publish date back to an AD ISO string for the server.
+    let publishAtIso: string | null = null
+    if (publishBS.trim()) {
+      try { publishAtIso = toAD(publishBS.trim()).toISOString() }
+      catch { toast.error("Invalid publish date"); return }
+    }
+
     startT(async () => {
       try {
         if (isEdit && editing) {
@@ -148,6 +197,7 @@ export function EvaluationFormSheet({
             sequenceNumber: parseInt(seq, 10) || 1,
             isFinal,
             classIds:       selectedClassIds,
+            publishAt:      publishAtIso,
           })
           toast.success("Evaluation updated")
         } else {
@@ -161,6 +211,7 @@ export function EvaluationFormSheet({
             isFinal,
             autoSeedSubjects: autoSeed,
             bandKey:        bandKey ?? undefined,
+            publishAt:      publishAtIso,
           })
           toast.success(autoSeed
             ? "Evaluation created with subjects seeded — open to add components"
@@ -232,12 +283,19 @@ export function EvaluationFormSheet({
 
           {/* Name + sequence + isFinal */}
           <Field label="Evaluation name">
-            <Input
+            <SearchableSelect
               value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="e.g. First Internal Evaluation, Final Result"
-              className="h-9 text-sm bg-white border-slate-200 rounded-lg"
+              onChange={pickName}
+              options={EVAL_NAME_PRESETS}
+              placeholder="Pick a preset or type your own…"
+              searchPlaceholder="Search presets or type custom name…"
+              emptyText="No preset matches — type to use as custom name."
+              allowFreeText
+              variant="plain"
             />
+            <p className="text-[10px] text-slate-400 mt-1">
+              Picking a preset auto-fills sequence number and the final-result toggle.
+            </p>
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
@@ -259,6 +317,44 @@ export function EvaluationFormSheet({
               </div>
             </Field>
           </div>
+
+          {/* Result publish date (BS) — printed on grade sheets */}
+          <Field label="Result publish date (BS)" icon={<Eye className="w-3 h-3" />}>
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <NepaliDateInput value={publishBS} onChange={setPublishBS} />
+              </div>
+              {!publishBS && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPublishBS(toBS(new Date()))}
+                  className="cursor-pointer text-xs h-9 whitespace-nowrap"
+                  title="Stamp today as the publish date"
+                >
+                  Today
+                </Button>
+              )}
+              {publishBS && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPublishBS("")}
+                  className="cursor-pointer text-xs h-9 whitespace-nowrap text-rose-600 border-rose-200 hover:bg-rose-50"
+                  title="Mark as draft (unpublished)"
+                >
+                  Unpublish
+                </Button>
+              )}
+            </div>
+            <p className="text-[10px] text-slate-400 mt-1">
+              {publishBS
+                ? <>This date prints as <strong>&quot;Date of Publication&quot;</strong> on each student&apos;s grade sheet.</>
+                : "Leave blank for a Draft. You can publish from the row toggle later."}
+            </p>
+          </Field>
 
           {/* Description: preset dropdown + override */}
           <Field label="Description (which schema?)">

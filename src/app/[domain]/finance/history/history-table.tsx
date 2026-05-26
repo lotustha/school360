@@ -16,7 +16,26 @@ export function HistoryTable({ rows }: Props) {
     {
       accessorKey: "receiptNumber",
       header: "Receipt #",
-      cell: ({ row }) => <span className="font-mono text-xs font-bold text-primary">{row.original.receiptNumber}</span>,
+      cell: ({ row }) => {
+        const isReversed = row.original.voucherStatus === "REVERSED"
+        const label = isReversed
+          ? `Voided receipt ${row.original.receiptNumber}`
+          : `Receipt ${row.original.receiptNumber}`
+        return (
+          <div className="inline-flex items-center gap-1.5">
+            <Link
+              href={`/finance/receipts/${row.original.id}/print`}
+              aria-label={label}
+              className={`font-mono text-xs font-bold text-primary hover:underline ${isReversed ? "line-through" : ""}`}
+            >
+              {row.original.receiptNumber}
+            </Link>
+            {isReversed && (
+              <span aria-hidden className="text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">VOIDED</span>
+            )}
+          </div>
+        )
+      },
     },
     {
       accessorKey: "dateBS",
@@ -81,7 +100,14 @@ export function HistoryTable({ rows }: Props) {
       id: "amount",
       accessorFn: r => parseFloat(r.amount),
       header: "Amount",
-      cell: ({ row }) => <span className="font-mono tabular-nums font-semibold">{row.original.amount}</span>,
+      cell: ({ row }) => {
+        const isReversed = row.original.voucherStatus === "REVERSED"
+        return (
+          <span className={`font-mono tabular-nums font-semibold ${isReversed ? "line-through text-slate-400" : ""}`}>
+            {row.original.amount}
+          </span>
+        )
+      },
     },
     {
       id: "actions",

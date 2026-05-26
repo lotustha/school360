@@ -46,7 +46,9 @@ export async function createAccount(input: z.infer<typeof createSchema>) {
 }
 
 export async function updateAccount(id: string, input: Partial<z.infer<typeof createSchema>>) {
-  await requirePermission("finance:manage")
+  const session = await requirePermission("finance:manage")
+  const existing = await prisma.account.findUnique({ where: { id }, select: { schoolId: true } })
+  if (!existing || existing.schoolId !== session.user.schoolId) throw new Error("Account not found")
   const updated = await prisma.account.update({
     where: { id },
     data:  {
@@ -65,14 +67,18 @@ export async function updateAccount(id: string, input: Partial<z.infer<typeof cr
 
 /** Reactivate a soft-disabled account. */
 export async function reactivateAccount(id: string) {
-  await requirePermission("finance:manage")
+  const session = await requirePermission("finance:manage")
+  const existing = await prisma.account.findUnique({ where: { id }, select: { schoolId: true } })
+  if (!existing || existing.schoolId !== session.user.schoolId) throw new Error("Account not found")
   await prisma.account.update({ where: { id }, data: { isActive: true } })
   revalidatePath("/accounting/accounts")
 }
 
 /** Soft-disable. Hard delete blocked if any JE exists. */
 export async function deactivateAccount(id: string) {
-  await requirePermission("finance:manage")
+  const session = await requirePermission("finance:manage")
+  const existing = await prisma.account.findUnique({ where: { id }, select: { schoolId: true } })
+  if (!existing || existing.schoolId !== session.user.schoolId) throw new Error("Account not found")
   const used = await prisma.journalEntry.count({ where: { accountId: id } })
   if (used > 0) {
     await prisma.account.update({ where: { id }, data: { isActive: false } })

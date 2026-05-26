@@ -70,8 +70,17 @@ export default async function Print({
           </div>
         </div>
       </div>
-      <p className="text-center text-xs mt-3 font-bold uppercase tracking-wider">
-        {bs.balanced ? "Balance Sheet is balanced" : "⚠ Balance Sheet is NOT balanced"}
+      <p className="text-center text-xs mt-3 font-bold uppercase tracking-wider inline-flex items-center justify-center gap-1.5 w-full">
+        {bs.balanced
+          ? "Balance Sheet is balanced"
+          : (
+            <>
+              <svg className="w-3.5 h-3.5 text-rose-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              <span className="text-rose-700">Balance Sheet is NOT balanced</span>
+            </>
+          )}
       </p>
     </ReportPrintShell>
   )

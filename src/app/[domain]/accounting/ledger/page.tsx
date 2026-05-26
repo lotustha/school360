@@ -11,6 +11,7 @@ import { getAccountLedger } from "@/actions/accounting/reports"
 import { formatBS, todayBS } from "@/lib/nepali-date"
 import { LedgerSwitcher } from "./ledger-switcher"
 import { LedgerTable } from "./ledger-table"
+import { LedgerExportButtons } from "./ledger-export"
 
 export const metadata: Metadata = { title: "Ledger" }
 
@@ -121,12 +122,7 @@ export default async function LedgerPage({
         </div>
         {ledger && (
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" disabled className="cursor-not-allowed gap-1.5 text-xs opacity-50" title="Coming in Phase 3">
-              <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
-            </Button>
-            <Button size="sm" variant="outline" disabled className="cursor-not-allowed gap-1.5 text-xs opacity-50" title="Print view coming soon">
-              <Printer className="w-3.5 h-3.5" /> Print
-            </Button>
+            <LedgerExportButtons ledger={ledger} />
           </div>
         )}
       </div>

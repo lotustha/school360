@@ -6,6 +6,7 @@ import { Prisma } from "../../../generated/prisma/client"
 import { prisma } from "@/lib/prisma"
 import { requirePermission } from "@/lib/permissions"
 import { writeAuditEntry } from "./audit"
+import { resolveReceivableAccountId } from "./allocations"
 import { toAD, generatePlanPeriods } from "@/lib/nepali-date"
 
 const D = Prisma.Decimal
@@ -220,7 +221,8 @@ export async function getStudentOutstanding(studentId: string): Promise<StudentF
   const rows = await prisma.studentFee.findMany({
     where: {
       schoolId, studentId,
-      status: { in: ["BILLED", "PARTIAL"] },
+      // PLANNED is collectable too — Collect Fee auto-promotes it to BILLED on payment.
+      status: { in: ["PLANNED", "BILLED", "PARTIAL"] },
     },
     include: {
       feeHead: { select: { name: true } },
@@ -411,12 +413,35 @@ export async function billPeriod(input: z.infer<typeof billPeriodSchema>): Promi
       periodIndex:  data.periodIndex,
       status:       "PLANNED",
     },
-    select: { id: true },
+    include: {
+      student: { include: { user: { select: { fullName: true } } } },
+      feeHead: { include: { feeAccount: { select: { id: true, name: true } } } },
+    },
   })
 
   if (candidates.length === 0) {
     return { billed: 0, skipped: 0, voucherPrefix: `BL-${fy.name}` }
   }
+
+  // Frequency / period-index sanity check (defensive — data model should already enforce):
+  // - periodIndex 0      → ANNUAL / ONE_TIME / EVENT
+  // - periodIndex 1..12  → MONTHLY
+  for (const c of candidates) {
+    const monthly = c.feeHead.frequency === "MONTHLY"
+    if (data.periodIndex === 0 && monthly) {
+      throw new Error(`Row "${c.periodLabel}" is MONTHLY but periodIndex=0 was supplied`)
+    }
+    if (data.periodIndex >= 1 && !monthly) {
+      throw new Error(`Row "${c.periodLabel}" is ${c.feeHead.frequency} but periodIndex=${data.periodIndex} (use 0 for non-monthly frequencies)`)
+    }
+  }
+
+  // Resolve AR account up-front (throws clearly if chart of accounts isn't seeded)
+  const arAccountId = await resolveReceivableAccountId(prisma, schoolId)
+  // Bills are dated to the FY start so they're guaranteed to land inside the
+  // target fiscal year regardless of when the user clicks "bill period".
+  const billDateAD = toAD(fy.startBS)
+  const billDateBS = fy.startBS
 
   let billed = 0
   await prisma.$transaction(async (tx) => {
@@ -429,10 +454,50 @@ export async function billPeriod(input: z.infer<typeof billPeriodSchema>): Promi
     const start = counter.lastNumber - candidates.length + 1
 
     for (let i = 0; i < candidates.length; i++) {
+      const row = candidates[i]
       const num = `BL-${fy.name}-${String(start + i).padStart(4, "0")}`
+      const studentLabel = row.student.user.fullName
+      // Post a real BL Voucher: DR AR / CR Income for the row's finalAmount.
+      const bv = await tx.voucher.create({
+        data: {
+          schoolId,
+          fiscalYearId: data.fiscalYearId,
+          type:         "BL",
+          number:       num,
+          dateBS:       billDateBS,
+          dateAD:       billDateAD,
+          narration:    `Bill — ${studentLabel} · ${row.periodLabel} · ${row.feeHead.feeAccount.name}`,
+          status:       "POSTED",
+          partyType:    "STUDENT",
+          partyId:      row.studentId,
+          partyName:    studentLabel,
+          totalAmount:  row.finalAmount,
+          postedAt:     new Date(),
+          postedById:   session.user.id,
+          createdById:  session.user.id,
+          lines: {
+            create: [
+              {
+                schoolId, accountId: arAccountId, lineNo: 1,
+                debit: row.finalAmount, credit: new D(0),
+                partyType: "STUDENT", partyId: row.studentId,
+                narration: `${row.feeHead.feeAccount.name} — ${row.periodLabel}`,
+              },
+              {
+                schoolId, accountId: row.feeHead.feeAccount.id, lineNo: 2,
+                debit: new D(0), credit: row.finalAmount,
+                partyType: "STUDENT", partyId: row.studentId,
+                narration: row.periodLabel,
+              },
+            ],
+          },
+        },
+        select: { id: true },
+      })
+
       await tx.studentFee.update({
-        where: { id: candidates[i].id },
-        data:  { status: "BILLED", billVoucherNumber: num },
+        where: { id: row.id },
+        data:  { status: "BILLED", billVoucherNumber: num, billVoucherId: bv.id },
       })
       billed++
     }
@@ -512,6 +577,56 @@ export async function createAdhocStudentFee(input: z.infer<typeof adhocSchema>) 
   return result
 }
 
+/**
+ * Forgive the unpaid balance on a BILLED or PARTIAL row. Unlike cancelStudentFee
+ * (which is for "this should never have been billed"), write-off accepts that
+ * the bill was legitimate but the school is releasing the student from the
+ * remaining obligation (e.g. uncollectable debt, hardship waiver).
+ *
+ * Flips status to CANCELLED with a "WRITTEN_OFF: " reason prefix so it's
+ * distinguishable in audit logs. Any payment already collected stays applied;
+ * only the unpaid balance is forgiven.
+ *
+ * GL impact: none in cash-basis. When accrual is enabled, this should also
+ * post a JV (DR Bad Debt Expense / CR Student Fee Receivable) for the unpaid
+ * balance — TODO once accrual lands.
+ */
+export async function writeOffStudentFee(id: string, reason: string) {
+  const session = await requirePermission("finance:billing")
+  if (!reason.trim()) throw new Error("Reason required to write off")
+  const schoolId = session.user.schoolId!
+
+  const r = await prisma.studentFee.findUnique({ where: { id } })
+  if (!r || r.schoolId !== schoolId) throw new Error("Fee row not found")
+  if (r.status === "PAID")      throw new Error("Row is already PAID — nothing to write off")
+  if (r.status === "CANCELLED") throw new Error("Row is already cancelled")
+  if (r.status === "PLANNED")   throw new Error("Row was never billed — use Cancel instead")
+
+  const writeOffAmount = r.finalAmount.minus(r.paidAmount)
+
+  await prisma.$transaction(async (tx) => {
+    await tx.studentFee.update({
+      where: { id },
+      data:  {
+        status:           "CANCELLED",
+        cancelledAt:      new Date(),
+        cancelledReason:  `WRITTEN_OFF: ${reason.trim()}`,
+      },
+    })
+    await writeAuditEntry(tx, {
+      schoolId, userId: session.user.id,
+      entity: "StudentFee", entityId: id, action: "WRITE_OFF",
+      before: { status: r.status, paidAmount: r.paidAmount.toFixed(2) },
+      after:  { status: "CANCELLED", writtenOffAmount: writeOffAmount.toFixed(2), reason: reason.trim() },
+    })
+  })
+
+  revalidatePath(`/finance/students/${r.studentId}`)
+  revalidatePath("/finance/classes")
+  revalidatePath("/finance/collect")
+  return { ok: true, writtenOffAmount: writeOffAmount.toFixed(2) }
+}
+
 export async function cancelStudentFee(id: string, reason: string) {
   const session = await requirePermission("finance:billing")
   if (!reason.trim()) throw new Error("Reason required to cancel")
@@ -539,78 +654,3 @@ export async function cancelStudentFee(id: string, reason: string) {
   return { ok: true }
 }
 
-// ─── FY scaffolding helper ──────────────────────────────────────────────────
-
-/**
- * Ensure a target student has rows in the current FY for a given head — used by
- * mid-year transfer-in workflow. Idempotent. Computes due dates from FY months.
- */
-export async function syncClassPlan(classId: string, planId: string) {
-  const session = await requirePermission("finance:billing")
-  const schoolId = session.user.schoolId!
-
-  const plan = await prisma.feePlan.findUnique({
-    where: { id: planId },
-    include: { items: { include: { feeHead: true } }, fiscalYear: true },
-  })
-  if (!plan || plan.schoolId !== schoolId) throw new Error("Plan not found")
-
-  const students = await prisma.student.findMany({
-    where: { schoolId, classId, status: "ACTIVE" },
-    select: { id: true },
-  })
-
-  type Row = Prisma.StudentFeeCreateManyInput
-  const rows: Row[] = []
-  for (const it of plan.items) {
-    const periodList = it.periods.split(",").map(s => Number(s.trim())).filter(n => !Number.isNaN(n))
-    const periods = generatePlanPeriods({
-      calendar:   plan.calendarSystem as "BS" | "AD",
-      startMonth: plan.startMonth,
-      startYear:  plan.startYear,
-      dueDay:     it.dueDay,
-    })
-    const periodByIndex = new Map(periods.map(p => [p.periodIndex, p]))
-    for (const s of students) {
-      for (const periodIndex of periodList) {
-        let periodLabel: string, dueDateBS: string
-        if (it.feeHead.frequency === "MONTHLY") {
-          const p = periodByIndex.get(periodIndex)
-          if (!p) continue
-          periodLabel = p.label
-          dueDateBS   = p.dueDateBS
-        } else {
-          const first = periods[0]
-          periodLabel = `${it.feeHead.name} ${first.label.split(" ").pop()}`
-          dueDateBS   = first.dueDateBS
-        }
-        rows.push({
-          schoolId,
-          studentId:     s.id,
-          fiscalYearId:  plan.fiscalYearId,
-          feeHeadId:     it.feeHeadId,
-          periodIndex:   it.feeHead.frequency === "MONTHLY" ? periodIndex : 0,
-          periodLabel,
-          baseAmount:    it.amount,
-          scholarshipPct: new D(0),
-          finalAmount:   it.amount,
-          dueDateBS,
-          dueDateAD:     toAD(dueDateBS),
-          status:        "PLANNED",
-          sourcePlanId:  plan.id,
-        })
-      }
-    }
-  }
-
-  const before = await prisma.studentFee.count({
-    where: { sourcePlanId: plan.id, student: { classId } },
-  })
-  await prisma.studentFee.createMany({ data: rows, skipDuplicates: true })
-  const after = await prisma.studentFee.count({
-    where: { sourcePlanId: plan.id, student: { classId } },
-  })
-
-  revalidatePath("/finance/classes")
-  return { created: after - before, attempted: rows.length }
-}
