@@ -6,7 +6,6 @@ import { Prisma } from "../../../generated/prisma/client"
 import { prisma } from "@/lib/prisma"
 import { requirePermission } from "@/lib/permissions"
 import { writeAuditEntry } from "./audit"
-import { resolveReceivableAccountId } from "./allocations"
 import { toAD, generatePlanPeriods } from "@/lib/nepali-date"
 
 const D = Prisma.Decimal
@@ -85,7 +84,6 @@ export interface StudentFeeRow {
   dueDateBS:         string
   isOverdue:         boolean
   notes:             string | null
-  billVoucherNumber: string | null
   sourcePlanId:      string | null
 }
 
@@ -142,9 +140,7 @@ export async function getStudentSchedule(filters: StudentScheduleFilters): Promi
     status:            r.status,
     dueDateBS:         r.dueDateBS,
     isOverdue:         r.status !== "PAID" && r.status !== "CANCELLED" && r.dueDateAD < now,
-    notes:             r.notes,
-    billVoucherNumber: r.billVoucherNumber,
-    sourcePlanId:      r.sourcePlanId,
+    notes:             r.notes,    sourcePlanId:      r.sourcePlanId,
   }))
 }
 
@@ -206,9 +202,7 @@ export async function getClassSchedule(filters: ClassScheduleFilters): Promise<S
     status:            r.status,
     dueDateBS:         r.dueDateBS,
     isOverdue:         r.status !== "PAID" && r.status !== "CANCELLED" && r.dueDateAD < now,
-    notes:             r.notes,
-    billVoucherNumber: r.billVoucherNumber,
-    sourcePlanId:      r.sourcePlanId,
+    notes:             r.notes,    sourcePlanId:      r.sourcePlanId,
   }))
 }
 
@@ -258,9 +252,7 @@ export async function getStudentOutstanding(studentId: string): Promise<StudentF
     status:            r.status,
     dueDateBS:         r.dueDateBS,
     isOverdue:         r.dueDateAD < now,
-    notes:             r.notes,
-    billVoucherNumber: r.billVoucherNumber,
-    sourcePlanId:      r.sourcePlanId,
+    notes:             r.notes,    sourcePlanId:      r.sourcePlanId,
   }))
 }
 
@@ -318,6 +310,7 @@ export async function editStudentFee(input: z.infer<typeof editOneSchema>) {
   revalidatePath("/finance/students")
   revalidatePath(`/finance/students/${existing.studentId}`)
   revalidatePath("/finance/classes")
+  revalidatePath("/finance/classes/[id]", "page")
   return { ok: true }
 }
 
@@ -378,14 +371,14 @@ export async function bulkEditStudentFees(input: z.infer<typeof bulkEditSchema>)
 
   revalidatePath("/finance/students")
   revalidatePath("/finance/classes")
+  revalidatePath("/finance/classes/[id]", "page")
   return { matched: rows.length, updated: candidates.length, skipped }
 }
 
-/** Flip PLANNED rows of the given target to BILLED, assigning a per-FY voucher number. */
+/** Flip PLANNED rows of the given target to BILLED (a non-GL "bill issued" marker). */
 export interface BillPeriodResult {
-  billed:      number
-  skipped:     number
-  voucherPrefix: string
+  billed:  number
+  skipped: number
 }
 
 export async function billPeriod(input: z.infer<typeof billPeriodSchema>): Promise<BillPeriodResult> {
@@ -414,13 +407,12 @@ export async function billPeriod(input: z.infer<typeof billPeriodSchema>): Promi
       status:       "PLANNED",
     },
     include: {
-      student: { include: { user: { select: { fullName: true } } } },
-      feeHead: { include: { feeAccount: { select: { id: true, name: true } } } },
+      feeHead: { select: { frequency: true } },
     },
   })
 
   if (candidates.length === 0) {
-    return { billed: 0, skipped: 0, voucherPrefix: `BL-${fy.name}` }
+    return { billed: 0, skipped: 0 }
   }
 
   // Frequency / period-index sanity check (defensive — data model should already enforce):
@@ -436,71 +428,16 @@ export async function billPeriod(input: z.infer<typeof billPeriodSchema>): Promi
     }
   }
 
-  // Resolve AR account up-front (throws clearly if chart of accounts isn't seeded)
-  const arAccountId = await resolveReceivableAccountId(prisma, schoolId)
-  // Bills are dated to the FY start so they're guaranteed to land inside the
-  // target fiscal year regardless of when the user clicks "bill period".
-  const billDateAD = toAD(fy.startBS)
-  const billDateBS = fy.startBS
-
   let billed = 0
   await prisma.$transaction(async (tx) => {
-    // Reserve a per-FY counter range
-    const counter = await tx.voucherCounter.upsert({
-      where:  { schoolId_fiscalYearId_type: { schoolId, fiscalYearId: data.fiscalYearId, type: "BL" } },
-      create: { schoolId, fiscalYearId: data.fiscalYearId, type: "BL", lastNumber: candidates.length },
-      update: { lastNumber: { increment: candidates.length } },
+    // Cash-basis: "billing" a period is just a non-GL marker that the fee has
+    // been issued to the parent (it surfaces in the Bill Book). No voucher is
+    // posted — income is recognized only when the fee is actually paid.
+    const res = await tx.studentFee.updateMany({
+      where: { id: { in: candidates.map(c => c.id) } },
+      data:  { status: "BILLED" },
     })
-    const start = counter.lastNumber - candidates.length + 1
-
-    for (let i = 0; i < candidates.length; i++) {
-      const row = candidates[i]
-      const num = `BL-${fy.name}-${String(start + i).padStart(4, "0")}`
-      const studentLabel = row.student.user.fullName
-      // Post a real BL Voucher: DR AR / CR Income for the row's finalAmount.
-      const bv = await tx.voucher.create({
-        data: {
-          schoolId,
-          fiscalYearId: data.fiscalYearId,
-          type:         "BL",
-          number:       num,
-          dateBS:       billDateBS,
-          dateAD:       billDateAD,
-          narration:    `Bill — ${studentLabel} · ${row.periodLabel} · ${row.feeHead.feeAccount.name}`,
-          status:       "POSTED",
-          partyType:    "STUDENT",
-          partyId:      row.studentId,
-          partyName:    studentLabel,
-          totalAmount:  row.finalAmount,
-          postedAt:     new Date(),
-          postedById:   session.user.id,
-          createdById:  session.user.id,
-          lines: {
-            create: [
-              {
-                schoolId, accountId: arAccountId, lineNo: 1,
-                debit: row.finalAmount, credit: new D(0),
-                partyType: "STUDENT", partyId: row.studentId,
-                narration: `${row.feeHead.feeAccount.name} — ${row.periodLabel}`,
-              },
-              {
-                schoolId, accountId: row.feeHead.feeAccount.id, lineNo: 2,
-                debit: new D(0), credit: row.finalAmount,
-                partyType: "STUDENT", partyId: row.studentId,
-                narration: row.periodLabel,
-              },
-            ],
-          },
-        },
-        select: { id: true },
-      })
-
-      await tx.studentFee.update({
-        where: { id: row.id },
-        data:  { status: "BILLED", billVoucherNumber: num, billVoucherId: bv.id },
-      })
-      billed++
-    }
+    billed = res.count
 
     await writeAuditEntry(tx, {
       schoolId, userId: session.user.id,
@@ -509,15 +446,15 @@ export async function billPeriod(input: z.infer<typeof billPeriodSchema>): Promi
         fiscalYearId: data.fiscalYearId,
         periodIndex:  data.periodIndex,
         count:        billed,
-        prefix:       `BL-${fy.name}`,
       },
     })
   }, { timeout: 60_000 })
 
   revalidatePath("/finance/classes")
+  revalidatePath("/finance/classes/[id]", "page")
   revalidatePath("/finance/students")
   revalidatePath("/finance/collect")
-  return { billed, skipped: 0, voucherPrefix: `BL-${fy.name}` }
+  return { billed, skipped: 0 }
 }
 
 /** Create an ad-hoc StudentFee row (e.g. one-time charge for a single student). */
@@ -574,6 +511,7 @@ export async function createAdhocStudentFee(input: z.infer<typeof adhocSchema>) 
 
   revalidatePath(`/finance/students/${data.studentId}`)
   revalidatePath("/finance/classes")
+  revalidatePath("/finance/classes/[id]", "page")
   return result
 }
 
@@ -623,6 +561,7 @@ export async function writeOffStudentFee(id: string, reason: string) {
 
   revalidatePath(`/finance/students/${r.studentId}`)
   revalidatePath("/finance/classes")
+  revalidatePath("/finance/classes/[id]", "page")
   revalidatePath("/finance/collect")
   return { ok: true, writtenOffAmount: writeOffAmount.toFixed(2) }
 }
@@ -651,6 +590,7 @@ export async function cancelStudentFee(id: string, reason: string) {
 
   revalidatePath(`/finance/students/${r.studentId}`)
   revalidatePath("/finance/classes")
+  revalidatePath("/finance/classes/[id]", "page")
   return { ok: true }
 }
 

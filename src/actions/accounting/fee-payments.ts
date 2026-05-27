@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma"
 import { requirePermission } from "@/lib/permissions"
 import { toAD } from "@/lib/nepali-date"
 import { resolveFiscalYearForDate } from "@/actions/accounting/fiscal-years"
-import { applyAllocations, planFifoAllocations, resolveReceivableAccountId } from "@/actions/billing/allocations"
+import { applyAllocations, planFifoAllocations } from "@/actions/billing/allocations"
 
 const D = Prisma.Decimal
 
@@ -120,15 +120,11 @@ export async function recordFeePayment(input: RecordFeePaymentInput): Promise<Re
       }
     }
 
-    // Step 2: derive per-head lines so GL credits the right INCOME heads.
-    // Two buckets:
-    //   - billAllocLines: payments against existing/PLANNED bills.
-    //     GL credit goes to AR (income was already recognized when the bill
-    //     was issued via a BL voucher).
-    //   - extraLines: ad-hoc charges (library fine, etc.) with no bill behind
-    //     them. GL credit goes directly to INCOME (cash sale).
-    // Both still produce one FeePaymentLine each so the receipt printout shows
-    // the per-head breakdown.
+    // Step 2: derive per-head lines so the GL credits the right INCOME heads and
+    // the receipt printout shows the per-head breakdown.
+    //   - billAllocLines: the portion settling outstanding StudentFee bills.
+    //   - extraLines: ad-hoc charges (library fine, etc.) with no bill behind them.
+    // Cash-basis: both are recognized as income on this receipt (see Step 4).
     const billAllocLines: Array<{ feeAccountId: string; accountName: string; amount: Prisma.Decimal; remarks: string | null }> = []
     const extraLines:     Array<{ feeAccountId: string; accountName: string; amount: Prisma.Decimal; remarks: string | null }> = []
 
@@ -174,12 +170,6 @@ export async function recordFeePayment(input: RecordFeePaymentInput): Promise<Re
     const total = derivedLines.reduce((s, l) => s.plus(l.amount), new D(0))
     if (total.lessThanOrEqualTo(0)) throw new Error("Total must be greater than zero")
 
-    // Aggregate AR credit for the bill portion (single voucher line, easier to trace)
-    const arCreditTotal = billAllocLines.reduce((s, l) => s.plus(l.amount), new D(0))
-    const arAccountId = arCreditTotal.greaterThan(0)
-      ? await resolveReceivableAccountId(tx, schoolId)
-      : null
-
     // Step 3: allocate counters
     const rc = await tx.voucherCounter.upsert({
       where:  { schoolId_fiscalYearId_type: { schoolId, fiscalYearId: fy.id, type: "FR" } },
@@ -199,11 +189,16 @@ export async function recordFeePayment(input: RecordFeePaymentInput): Promise<Re
       ? `${student.user.fullName} · ${student.class.name}${student.section ? "-" + student.section.name : ""}`
       : student.user.fullName
 
-    // Step 4: voucher lines under accrual:
+    // Step 4: voucher lines (cash-basis):
     //   DR Cash/Bank (total)
-    //   CR AR (aggregated) for bill allocations — income was already recognized
-    //     at billing time on the corresponding BL voucher(s)
-    //   CR Income (per head) for ad-hoc charges — direct cash sale, no bill
+    //   CR Income (per fee head) — every collected rupee is recognized as income
+    //   at the moment of receipt, whether it settles a bill or is an ad-hoc charge.
+    const incomeByAccount = new Map<string, { amount: Prisma.Decimal; name: string }>()
+    for (const l of derivedLines) {
+      const e = incomeByAccount.get(l.feeAccountId) ?? { amount: new D(0), name: l.accountName }
+      e.amount = e.amount.plus(l.amount)
+      incomeByAccount.set(l.feeAccountId, e)
+    }
     const voucherLines: Array<{
       schoolId: string; accountId: string; lineNo: number;
       debit: Prisma.Decimal; credit: Prisma.Decimal;
@@ -217,20 +212,12 @@ export async function recordFeePayment(input: RecordFeePaymentInput): Promise<Re
       },
     ]
     let lineNo = 2
-    if (arAccountId && arCreditTotal.greaterThan(0)) {
+    for (const [accountId, e] of incomeByAccount) {
       voucherLines.push({
-        schoolId, accountId: arAccountId, lineNo: lineNo++,
-        debit: new D(0), credit: arCreditTotal,
+        schoolId, accountId, lineNo: lineNo++,
+        debit: new D(0), credit: e.amount,
         partyType: "STUDENT", partyId: data.studentId,
-        narration: `Settle outstanding bills (${billAllocLines.length} row${billAllocLines.length === 1 ? "" : "s"})`,
-      })
-    }
-    for (const line of extraLines) {
-      voucherLines.push({
-        schoolId, accountId: line.feeAccountId, lineNo: lineNo++,
-        debit: new D(0), credit: line.amount,
-        partyType: "STUDENT", partyId: data.studentId,
-        narration: line.remarks ? `${line.accountName} — ${line.remarks}` : line.accountName,
+        narration: e.name,
       })
     }
 
@@ -284,17 +271,9 @@ export async function recordFeePayment(input: RecordFeePaymentInput): Promise<Re
       select: { id: true, receiptNumber: true },
     })
 
-    // Step 6: write allocation rows + update bill paidAmount/status.
-    // Pass accrualCtx so PLANNED rows auto-billed during collection also get a
-    // real BL Voucher posted (DR AR / CR Income) in the same transaction.
+    // Step 6: write allocation rows + update bill paidAmount/status (no GL here).
     if (allocations.length > 0) {
-      await applyAllocations(tx, schoolId, fp.id, allocations, {
-        fiscalYearId: fy.id,
-        fyName:       fy.name,
-        dateBS:       data.dateBS,
-        dateAD,
-        userId:       session.user.id,
-      })
+      await applyAllocations(tx, schoolId, fp.id, allocations)
     }
 
     return {
@@ -308,6 +287,7 @@ export async function recordFeePayment(input: RecordFeePaymentInput): Promise<Re
   revalidatePath("/finance")
   revalidatePath("/finance/history")
   revalidatePath("/finance/classes")
+  revalidatePath("/finance/classes/[id]", "page")
   revalidatePath(`/finance/students/${input.studentId}`)
   revalidatePath("/accounting")
   revalidatePath("/accounting/vouchers")
@@ -603,16 +583,16 @@ export async function getFinanceDashboard() {
         voucher:    { select: { status: true } },
       },
     }),
-    // Total receivable: BILLED + PARTIAL + PLANNED rows' balance.
-    // PLANNED counts because the new Collect flow treats them as collectable.
+    // Total receivable (AR) = issued-but-unpaid balance: BILLED + PARTIAL only.
+    // PLANNED is scheduled-but-not-yet-issued, so it's not a receivable and is excluded.
     prisma.studentFee.aggregate({
-      where: { schoolId, status: { in: ["BILLED", "PARTIAL", "PLANNED"] } },
+      where: { schoolId, status: { in: ["BILLED", "PARTIAL"] } },
       _sum:  { finalAmount: true, paidAmount: true },
     }),
     prisma.studentFee.aggregate({
       where: {
         schoolId,
-        status:    { in: ["BILLED", "PARTIAL", "PLANNED"] },
+        status:    { in: ["BILLED", "PARTIAL"] },
         dueDateAD: { lt: todayAD },
       },
       _sum:   { finalAmount: true, paidAmount: true },
@@ -630,7 +610,7 @@ export async function getFinanceDashboard() {
     prisma.studentFee.findMany({
       where: {
         schoolId,
-        status:  { in: ["BILLED", "PARTIAL", "PLANNED"] },
+        status:  { in: ["BILLED", "PARTIAL"] },
         student: { status: "ACTIVE" },
       },
       select: {

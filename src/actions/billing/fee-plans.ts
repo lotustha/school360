@@ -374,6 +374,7 @@ export async function applyPlanToTarget(input: z.infer<typeof applyTargetSchema>
   revalidatePath("/finance/plans")
   revalidatePath(`/finance/plans/${plan.id}`)
   revalidatePath("/finance/classes")
+  revalidatePath("/finance/classes/[id]", "page")
   revalidatePath("/finance/students")
   return { studentsTouched: students.length, rowsCreated: created, rowsSkipped: skipped }
 }

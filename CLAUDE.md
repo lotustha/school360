@@ -78,45 +78,34 @@ PLANNED ──▶ BILLED ──▶ PARTIAL ──▶ PAID
                   └───────┴──▶ CANCELLED  (cancel or write-off)
 ```
 
-- **PLANNED**: scheduled by a FeePlan but not yet invoiced. No GL impact. Visible to the Collect Fee page — paying against it auto-promotes (see below).
-- **BILLED**: a `BL` Voucher has been posted (DR `Student Fee Receivable` 1130 / CR Income head). Row has a `billVoucherNumber` and `billVoucherId`.
+- **PLANNED**: scheduled by a FeePlan but not yet issued to the parent. No GL impact. Visible to the Collect Fee page.
+- **BILLED**: marked as issued to the parent via "Bill Period". **No GL impact** — billing is purely a billing-module marker (cash-basis; income is recognized only on payment). No voucher, no `billVoucher*` fields.
 - **PARTIAL** / **PAID**: payments have been applied via `FeePaymentAllocation` rows. `paidAmount` is incremented; status auto-recomputed.
 - **CANCELLED**: `cancelStudentFee` (only when no money paid) or `writeOffStudentFee` (forgive unpaid balance — reason prefixed `WRITTEN_OFF:`).
 
-#### Voucher posting (accrual mode)
+#### Income recognition (cash-basis)
+
+Income is recognized **only when cash is received** — a receivable is never booked. Billing a period has no GL effect; it just flips PLANNED→BILLED so the fee surfaces as an issued, collectable charge. The per-class outstanding rollup lives on the **Classes landing page** (`/finance/classes`, aggregated in its `page.tsx`); `getStudentLedger` (`src/actions/billing/`) gives the per-student view. These are billing-module receivables views, **not** GL accounts.
+
+`billed` / `outstanding` figures count **issued rows only** (BILLED + PARTIAL + PAID); PLANNED rows are reported in a separate "Planned" bucket and are never folded into billed or outstanding. (The standalone Bill Book page that previously held this rollup was removed 2026-05-26 and merged into `/finance/classes`.)
 
 | Event | Voucher type | GL lines |
 |---|---|---|
-| Bill issuance (manual via `/finance/classes/[id]` "Bill Period", or auto during payment) | `BL` | DR `Student Fee Receivable` (1130) / CR Income head |
-| Receipt collected against a bill | `RV` | DR Cash or Bank / CR `Student Fee Receivable` (1130) |
-| Receipt with ad-hoc line (no bill behind it) | `RV` | DR Cash or Bank / CR Income head directly (cash-basis recognition for that line) |
+| Bill issuance (`/finance/classes/[id]` "Bill Period") | — (none) | No GL posting; row flips PLANNED→BILLED |
+| Receipt collected (`recordFeePayment`) | `RV` | DR Cash or Bank / CR Income head (one credit per fee head, whether settling a bill or an ad-hoc charge) |
 
-A single RV can credit AR (for allocations) AND Income (for ad-hoc lines) in one voucher.
-
-The AR control account is seeded as code `1130` ("Student Fee Receivable", subType `RECEIVABLE`, `isControl: true`). Resolve at runtime via `resolveReceivableAccountId(tx, schoolId)` in `src/actions/billing/allocations.ts`.
-
-#### Auto-bill during collection
-
-When a payment is recorded against a PLANNED row, `applyAllocations(tx, …, accrualCtx)` will:
-
-1. Mint a `BL-FYNAME-NNNN` voucher number (per-FY counter via `voucherCounter`)
-2. Create a real BL `Voucher` row (DR AR / CR Income)
-3. Stamp `billVoucherNumber` + `billVoucherId` on the StudentFee
-4. Flip the row to BILLED, then apply the payment (→ PARTIAL or PAID)
-
-All inside the same Postgres transaction that creates the RV voucher.
+`applyAllocations(tx, schoolId, feePaymentId, allocations)` only updates `StudentFee.paidAmount` / status — it posts no GL. There is **no** AR control account: account `1130` and the `resolveReceivableAccountId` / `accrualCtx` / BL-voucher machinery were removed when the system moved to cash-basis on 2026-05-26. (`1140` Staff Advances still uses subType `RECEIVABLE`.)
 
 #### Voucher reversal cascade
 
 `reverseVoucher(id, reason?)` posts an offsetting voucher (debits/credits swapped) and additionally:
 
-- **RV reversal**: rolls back `StudentFee.paidAmount` per allocation, recomputes status, deletes `FeePaymentAllocation` rows. Keeps `FeePayment` + `FeePaymentLine` rows as voided audit records.
-- **BL reversal**: only allowed when no payment is applied — row returns to PLANNED, `billVoucherNumber` / `billVoucherId` cleared. If payments exist, throws (must reverse the receipt first).
+- **RV reversal**: rolls back `StudentFee.paidAmount` per allocation, recomputes status (full reversal → BILLED, partial → PARTIAL), deletes `FeePaymentAllocation` rows. Keeps `FeePayment` + `FeePaymentLine` rows as voided audit records.
 - **PV / CV / JV**: just the GL math is reversed.
 
-#### Pre-accrual data (cutover)
+#### History note (accrual cutover)
 
-This codebase started cash-basis; accrual went live on 2026-05-25. Old receipts pre-cutover credit Income directly (no AR involvement, no BL voucher). New receipts use the accrual pattern. Both coexist in the GL with no migration; reports filter by `Account.type` so they aggregate income correctly regardless of which path posted it. Trial Balance and Balance Sheet will only show meaningful AR balance after the cutover date.
+Accrual was briefly live (2026-05-25). On 2026-05-26 the system moved to cash-basis: existing `BL` vouchers were deleted, the one accrual-era `RV` that credited AR was offset by an adjusting `JV` (DR 1130 / CR Income), and account 1130 was left dormant at a zero balance. Pre-accrual and post-cutover receipts both credit Income directly, so reports aggregate income correctly by `Account.type`.
 
 #### Permissions
 

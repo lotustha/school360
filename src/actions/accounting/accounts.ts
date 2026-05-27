@@ -113,7 +113,6 @@ const COA_SEED: SeedNode[] = [
       { code: "1100", name: "Current Assets", type: "ASSET", children: [
         { code: "1110", name: "Cash in Hand",         type: "ASSET", subType: "CASH" },
         { code: "1120", name: "Bank Accounts",        type: "ASSET", subType: "BANK" },
-        { code: "1130", name: "Student Fee Receivable", type: "ASSET", subType: "RECEIVABLE", isControl: true },
         { code: "1140", name: "Staff Advances",       type: "ASSET", subType: "RECEIVABLE", isControl: true },
         { code: "1150", name: "Prepaid Expenses",     type: "ASSET", subType: "CURRENT_ASSET" },
       ]},
@@ -133,6 +132,8 @@ const COA_SEED: SeedNode[] = [
         { code: "2120", name: "Salary Payable",    type: "LIABILITY", subType: "PAYABLE" },
         { code: "2130", name: "TDS Payable",       type: "LIABILITY", subType: "TAX_PAYABLE" },
         { code: "2140", name: "SSF Payable",       type: "LIABILITY", subType: "TAX_PAYABLE" },
+        { code: "2145", name: "PF Payable",        type: "LIABILITY", subType: "PAYABLE" },
+        { code: "2146", name: "CIT Payable",       type: "LIABILITY", subType: "PAYABLE" },
         { code: "2150", name: "VAT Payable",       type: "LIABILITY", subType: "TAX_PAYABLE" },
         { code: "2160", name: "Advance Fee Received", type: "LIABILITY", subType: "CURRENT_LIABILITY" },
       ]},
@@ -160,6 +161,7 @@ const COA_SEED: SeedNode[] = [
   {
     code: "5000", name: "Expenses", type: "EXPENSE", children: [
       { code: "5100", name: "Salaries & Allowances",   type: "EXPENSE", subType: "OPERATING_EXPENSE" },
+      { code: "5150", name: "Employer Contributions (PF/CIT)", type: "EXPENSE", subType: "OPERATING_EXPENSE" },
       { code: "5200", name: "Rent",                    type: "EXPENSE", subType: "OPERATING_EXPENSE" },
       { code: "5300", name: "Utilities (Electricity, Water, Internet)", type: "EXPENSE", subType: "OPERATING_EXPENSE" },
       { code: "5400", name: "Teaching Materials",      type: "EXPENSE", subType: "OPERATING_EXPENSE" },

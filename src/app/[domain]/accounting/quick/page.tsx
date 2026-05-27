@@ -1,6 +1,7 @@
 import { Metadata } from "next"
 import { redirect } from "next/navigation"
 import { listAccounts } from "@/actions/accounting/accounts"
+import { getCashBalances } from "@/actions/accounting/reports"
 import { getCurrentFiscalYear } from "@/actions/accounting/fiscal-years"
 import { QuickVouchersClient } from "./quick-vouchers-client"
 
@@ -10,7 +11,10 @@ export default async function QuickVouchersPage() {
   const fy = await getCurrentFiscalYear()
   if (!fy) redirect("/accounting/setup")
 
-  const accounts = await listAccounts()
+  const [accounts, cashBalances] = await Promise.all([
+    listAccounts(),
+    getCashBalances(fy.id),
+  ])
 
   // Pre-resolve common system accounts by code (from the seeded COA).
   function byCode(code: string) {
@@ -34,6 +38,9 @@ export default async function QuickVouchersPage() {
     other_expense:  byCode("5900"),
     tdsPayable:     byCode("2130"),
     ssfPayable:     byCode("2140"),
+    pfPayable:      byCode("2145"),
+    citPayable:     byCode("2146"),
+    employerContrib: byCode("5150"),
   }
 
   return (
@@ -41,9 +48,10 @@ export default async function QuickVouchersPage() {
       fiscalYearId={fy.id}
       fiscalYearName={fy.name}
       presets={presets}
+      cashBalances={cashBalances}
       accounts={accounts
         .filter(a => a.isActive)
-        .map(a => ({ id: a.id, code: a.code, name: a.name, type: a.type, subType: a.subType }))}
+        .map(a => ({ id: a.id, code: a.code, name: a.name, type: a.type, subType: a.subType, parentId: a.parentId }))}
     />
   )
 }

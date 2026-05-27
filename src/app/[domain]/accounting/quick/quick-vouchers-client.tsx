@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition, useMemo } from "react"
+import { useState, useTransition, useMemo, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -27,13 +27,27 @@ import {
   buildDayFeeCollection, buildSalaryPayroll,
 } from "@/lib/accounting-templates"
 
-interface Account { id: string; code: string; name: string; type: string; subType: string | null }
+interface Account { id: string; code: string; name: string; type: string; subType: string | null; parentId: string | null }
 
 interface Props {
   fiscalYearId:   string
   fiscalYearName: string
   presets:        Record<string, string>   // common account IDs by short key
+  cashBalances:   Record<string, string>   // accountId → current cash balance (CASH accounts)
   accounts:       Account[]
+}
+
+// Group accounts (those that have children — e.g. the "1120 Bank Accounts" parent)
+// are not postable; entries belong on the leaf cash/bank sub-accounts. This filters
+// them out so selectors only offer real, postable accounts.
+function leafAccounts(accounts: Account[]) {
+  const groupIds = new Set(accounts.map(a => a.parentId).filter((p): p is string => !!p))
+  const isLeaf = (a: Account) => !groupIds.has(a.id)
+  return {
+    cashOrBank:   accounts.filter(a => (a.subType === "CASH" || a.subType === "BANK") && isLeaf(a)),
+    cashAccounts: accounts.filter(a => a.subType === "CASH" && isLeaf(a)),
+    bankAccounts: accounts.filter(a => a.subType === "BANK" && isLeaf(a)),
+  }
 }
 
 const ICON_MAP: Record<QuickTemplateId, React.ElementType> = {
@@ -58,7 +72,7 @@ const COLOR_MAP = {
   slate:   { bg: "bg-slate-50",    text: "text-slate-700",    ring: "ring-slate-200/60",   hover: "hover:border-slate-300",   icon: "text-slate-600",   iconBg: "bg-slate-500/10" },
 } as const
 
-export function QuickVouchersClient({ fiscalYearId, fiscalYearName, presets, accounts }: Props) {
+export function QuickVouchersClient({ fiscalYearId, fiscalYearName, presets, accounts, cashBalances }: Props) {
   const [selected, setSelected] = useState<QuickTemplateId | null>(null)
   const tpl = selected ? QUICK_TEMPLATES.find(t => t.id === selected) ?? null : null
 
@@ -95,6 +109,7 @@ export function QuickVouchersClient({ fiscalYearId, fiscalYearName, presets, acc
                 template={tpl}
                 presets={presets}
                 accounts={accounts}
+                cashBalances={cashBalances}
                 fiscalYearId={fiscalYearId}
                 fiscalYearName={fiscalYearName}
               />
@@ -174,6 +189,7 @@ interface TemplateFormProps {
   template:       QuickTemplate
   presets:        Record<string, string>
   accounts:       Account[]
+  cashBalances:   Record<string, string>
   fiscalYearId:   string
   fiscalYearName: string
 }
@@ -186,7 +202,7 @@ function TemplateForm(props: TemplateFormProps) {
   return <SimpleTemplateForm {...props} />
 }
 
-function SimpleTemplateForm({ template, presets, accounts, fiscalYearId, fiscalYearName }: TemplateFormProps) {
+function SimpleTemplateForm({ template, presets, accounts, cashBalances, fiscalYearId, fiscalYearName }: TemplateFormProps) {
   const router = useRouter()
   const [pending, start] = useTransition()
 
@@ -204,10 +220,31 @@ function SimpleTemplateForm({ template, presets, accounts, fiscalYearId, fiscalY
   const [tdsPercent,   setTdsPercent]   = useState("10")
   const [tdsAmount,    setTdsAmount]    = useState("")
   const [ssfAmount,    setSsfAmount]    = useState("")
+  const [pfAmount,          setPfAmount]          = useState("")
+  const [pfEmployerAmount,  setPfEmployerAmount]  = useState("")
+  const [citAmount,         setCitAmount]         = useState("")
+  const [citEmployerAmount, setCitEmployerAmount] = useState("")
 
-  const cashOrBank = useMemo(() => accounts.filter(a => a.subType === "CASH" || a.subType === "BANK"), [accounts])
+  const { cashOrBank, cashAccounts, bankAccounts } = useMemo(() => leafAccounts(accounts), [accounts])
   const incomeAccounts  = useMemo(() => accounts.filter(a => a.type === "INCOME"),  [accounts])
   const expenseAccounts = useMemo(() => accounts.filter(a => a.type === "EXPENSE"), [accounts])
+
+  // Contra (deposit/withdraw) lets the user pick the exact cash + bank accounts.
+  // Cash defaults to the single cash account; bank is left empty to force an
+  // explicit choice — never default to the 1120 group or an arbitrary bank.
+  const [contraCashId, setContraCashId] = useState(presets.cash || "")
+  const [contraBankId, setContraBankId] = useState("")
+
+  // Deposit Cash to Bank: prefill the amount with the selected cash account's
+  // current balance (cash on hand). Re-fills when the cash account changes, but
+  // not after the user edits the amount, so a manual entry is never clobbered.
+  const [autoFilledFor, setAutoFilledFor] = useState("")
+  useEffect(() => {
+    if (template.id !== "deposit-cash") return
+    if (!contraCashId || autoFilledFor === contraCashId) return
+    setAmount(cashBalances[contraCashId] ?? "")
+    setAutoFilledFor(contraCashId)
+  }, [template.id, contraCashId, cashBalances, autoFilledFor])
 
   function compute(): { input: ReturnType<typeof buildFeeReceipt> | null; net: string | null } {
     const amt = parseFloat(amount || "0") || 0
@@ -260,29 +297,35 @@ function SimpleTemplateForm({ template, presets, accounts, fiscalYearId, fiscalY
         if (!presets.salary || !presets.tdsPayable || !presets.ssfPayable || !source) return { input: null, net: null }
         const tds = parseFloat(tdsAmount || "0") || 0
         const ssf = parseFloat(ssfAmount || "0") || 0
-        const net = (amt - tds - ssf).toFixed(2)
+        const pf  = parseFloat(pfAmount  || "0") || 0
+        const cit = parseFloat(citAmount || "0") || 0
+        const net = (amt - tds - ssf - pf - cit).toFixed(2)
         return {
           input: buildPaySalary({
             ...common, gross: amount, employeeName: partyName, panNumber,
             tdsAmount, ssfAmount,
+            pfAmount, pfEmployerAmount, citAmount, citEmployerAmount,
             salaryAccountId:     presets.salary,
             tdsPayableAccountId: presets.tdsPayable,
             ssfPayableAccountId: presets.ssfPayable,
+            pfPayableAccountId:  presets.pfPayable,
+            citPayableAccountId: presets.citPayable,
+            employerContribAccountId: presets.employerContrib,
             sourceAccountId:     source,
           }),
           net,
         }
       }
       case "deposit-cash":
-        if (!presets.cash || !presets.bank) return { input: null, net: null }
+        if (!contraCashId || !contraBankId) return { input: null, net: null }
         return {
-          input: buildDepositCash({ ...common, amount, cashAccountId: presets.cash, bankAccountId: presets.bank }),
+          input: buildDepositCash({ ...common, amount, cashAccountId: contraCashId, bankAccountId: contraBankId }),
           net: amount,
         }
       case "withdraw-cash":
-        if (!presets.cash || !presets.bank) return { input: null, net: null }
+        if (!contraCashId || !contraBankId) return { input: null, net: null }
         return {
-          input: buildWithdrawCash({ ...common, amount, cashAccountId: presets.cash, bankAccountId: presets.bank }),
+          input: buildWithdrawCash({ ...common, amount, cashAccountId: contraCashId, bankAccountId: contraBankId }),
           net: amount,
         }
       default:
@@ -318,7 +361,9 @@ function SimpleTemplateForm({ template, presets, accounts, fiscalYearId, fiscalY
         <Field label="Date (BS)">
           <NepaliDateInput value={dateBS} onChange={setDateBS} />
         </Field>
-        <Field label="Amount (Rs.) *">
+        <Field label={template.id === "deposit-cash" && contraCashId
+          ? `Amount (Rs.) * — Rs. ${cashBalances[contraCashId] ?? "0.00"} on hand`
+          : "Amount (Rs.) *"}>
           <Input
             type="text" inputMode="decimal"
             value={amount} onChange={e => setAmount(e.target.value)}
@@ -375,12 +420,24 @@ function SimpleTemplateForm({ template, presets, accounts, fiscalYearId, fiscalY
       )}
 
       {template.id === "pay-salary" && (
-        <div className="grid sm:grid-cols-2 gap-3">
-          <Field label="TDS amount (Rs.)">
+        <div className="grid sm:grid-cols-3 gap-3">
+          <Field label="TDS (Rs.)">
             <Input type="text" inputMode="decimal" value={tdsAmount} onChange={e => setTdsAmount(e.target.value)} placeholder="0.00" className="font-mono text-right" />
           </Field>
-          <Field label="SSF amount (Rs.)">
+          <Field label="SSF (Rs.)">
             <Input type="text" inputMode="decimal" value={ssfAmount} onChange={e => setSsfAmount(e.target.value)} placeholder="0.00" className="font-mono text-right" />
+          </Field>
+          <Field label="PF — employee (Rs.)">
+            <Input type="text" inputMode="decimal" value={pfAmount} onChange={e => setPfAmount(e.target.value)} placeholder="0.00" className="font-mono text-right" />
+          </Field>
+          <Field label="PF — employer (Rs.)">
+            <Input type="text" inputMode="decimal" value={pfEmployerAmount} onChange={e => setPfEmployerAmount(e.target.value)} placeholder="0.00" className="font-mono text-right" />
+          </Field>
+          <Field label="CIT — employee (Rs.)">
+            <Input type="text" inputMode="decimal" value={citAmount} onChange={e => setCitAmount(e.target.value)} placeholder="0.00" className="font-mono text-right" />
+          </Field>
+          <Field label="CIT — employer (Rs.)">
+            <Input type="text" inputMode="decimal" value={citEmployerAmount} onChange={e => setCitEmployerAmount(e.target.value)} placeholder="0.00" className="font-mono text-right" />
           </Field>
         </div>
       )}
@@ -408,6 +465,27 @@ function SimpleTemplateForm({ template, presets, accounts, fiscalYearId, fiscalY
           </div>
         </Field>
       )}
+
+      {/* Contra (deposit/withdraw): pick the specific cash + bank accounts.
+          Order follows the money flow — source on the left, destination on the right:
+          deposit = Cash → Bank; withdraw = Bank → Cash. */}
+      {(template.id === "deposit-cash" || template.id === "withdraw-cash") && (() => {
+        const cashField = (
+          <Field key="cash" label="Cash account *">
+            <AccountPicker value={contraCashId} onChange={setContraCashId} accounts={cashAccounts} placeholder="Select cash account…" />
+          </Field>
+        )
+        const bankField = (
+          <Field key="bank" label="Bank account *">
+            <AccountPicker value={contraBankId} onChange={setContraBankId} accounts={bankAccounts} placeholder="Select bank account…" />
+          </Field>
+        )
+        return (
+          <div className="grid sm:grid-cols-2 gap-3">
+            {template.id === "withdraw-cash" ? [bankField, cashField] : [cashField, bankField]}
+          </div>
+        )
+      })()}
 
       <Field label="Narration (optional)">
         <NarrationAutocomplete
@@ -463,6 +541,7 @@ function DayFeeCollectionForm({ template, presets, accounts, fiscalYearId, fisca
   const [dateBS,    setDateBS]    = useState(todayBS())
   const [cashAmt,   setCashAmt]   = useState("")
   const [bankAmt,   setBankAmt]   = useState("")
+  const [bankAccountId, setBankAccountId] = useState("")  // which bank the bank/cheque portion lands in
   const [narration, setNarration] = useState("")
   // Per-head amounts keyed by preset code (tuition, admission, exam, transport, hostel)
   const [heads,     setHeads]     = useState<Record<string, string>>({})
@@ -470,6 +549,8 @@ function DayFeeCollectionForm({ template, presets, accounts, fiscalYearId, fisca
   function updateHead(code: string, amount: string) {
     setHeads(prev => ({ ...prev, [code]: amount }))
   }
+
+  const { bankAccounts } = useMemo(() => leafAccounts(accounts), [accounts])
 
   // All active income accounts become fee-head rows. Add / rename via the COA editor or inline dialog.
   const incomeAccounts = useMemo(
@@ -504,7 +585,7 @@ function DayFeeCollectionForm({ template, presets, accounts, fiscalYearId, fisca
     .filter(a => (parseFloat(heads[a.id] || "0") || 0) > 0)
     .map(a => ({ accountId: a.id, label: a.name, amount: heads[a.id] || "0" }))
 
-  const canPost = balanced && headsForBuild.length > 0 && !!presets.cash && !!presets.bank
+  const canPost = balanced && headsForBuild.length > 0 && !!presets.cash && (bank <= 0 || !!bankAccountId)
 
   function handlePost() {
     if (!canPost) { toast.error("Cash + Bank totals must equal the sum of fee heads"); return }
@@ -515,7 +596,7 @@ function DayFeeCollectionForm({ template, presets, accounts, fiscalYearId, fisca
           cashAmount:    cashAmt || "0",
           bankAmount:    bankAmt || "0",
           cashAccountId: presets.cash,
-          bankAccountId: presets.bank,
+          bankAccountId: bankAccountId,
           heads:         headsForBuild,
         })
         const res = await createAndPostQuickVoucher(input)
@@ -543,6 +624,12 @@ function DayFeeCollectionForm({ template, presets, accounts, fiscalYearId, fisca
           <Input type="text" inputMode="decimal" value={bankAmt} onChange={e => setBankAmt(e.target.value)} placeholder="0.00" className="font-mono text-right" />
         </Field>
       </div>
+
+      {bank > 0 && (
+        <Field label="Deposit bank/cheque into *">
+          <AccountPicker value={bankAccountId} onChange={setBankAccountId} accounts={bankAccounts} placeholder="Select bank account…" />
+        </Field>
+      )}
 
       <div className="bg-slate-50/60 border border-slate-200 rounded-xl overflow-hidden">
         <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
@@ -624,15 +711,21 @@ function SalaryPayrollForm({ template, presets, accounts, fiscalYearId, fiscalYe
   const [totalGross, setTotalGross] = useState("")
   const [totalTds,   setTotalTds]   = useState("")
   const [totalSsf,   setTotalSsf]   = useState("")
-  const [source,     setSource]     = useState(presets.bank || presets.cash || "")
+  const [totalPf,          setTotalPf]          = useState("")
+  const [totalPfEmployer,  setTotalPfEmployer]  = useState("")
+  const [totalCit,         setTotalCit]         = useState("")
+  const [totalCitEmployer, setTotalCitEmployer] = useState("")
+  const [source,     setSource]     = useState("")  // pick pay-from explicitly (no group default)
   const [narration,  setNarration]  = useState("")
 
   const gross = parseFloat(totalGross || "0") || 0
   const tds   = parseFloat(totalTds   || "0") || 0
   const ssf   = parseFloat(totalSsf   || "0") || 0
-  const net   = Math.max(0, gross - tds - ssf)
+  const pf    = parseFloat(totalPf    || "0") || 0
+  const cit   = parseFloat(totalCit   || "0") || 0
+  const net   = Math.max(0, gross - tds - ssf - pf - cit)
 
-  const cashOrBank = useMemo(() => accounts.filter(a => a.subType === "CASH" || a.subType === "BANK"), [accounts])
+  const { cashOrBank } = useMemo(() => leafAccounts(accounts), [accounts])
 
   const canPost = gross > 0 && !!source
     && !!presets.salary && !!presets.tdsPayable && !!presets.ssfPayable
@@ -646,9 +739,16 @@ function SalaryPayrollForm({ template, presets, accounts, fiscalYearId, fiscalYe
           totalGross,
           totalTds: totalTds || "0",
           totalSsf: totalSsf || "0",
+          totalPf:  totalPf  || "0",
+          totalPfEmployer:  totalPfEmployer  || "0",
+          totalCit: totalCit || "0",
+          totalCitEmployer: totalCitEmployer || "0",
           salaryAccountId:     presets.salary,
           tdsPayableAccountId: presets.tdsPayable,
           ssfPayableAccountId: presets.ssfPayable,
+          pfPayableAccountId:  presets.pfPayable,
+          citPayableAccountId: presets.citPayable,
+          employerContribAccountId: presets.employerContrib,
           sourceAccountId:     source,
         })
         const res = await createAndPostQuickVoucher(input)
@@ -684,6 +784,26 @@ function SalaryPayrollForm({ template, presets, accounts, fiscalYearId, fiscalYe
         <Field label="Total SSF Deducted">
           <Input type="text" inputMode="decimal" value={totalSsf} onChange={e => setTotalSsf(e.target.value)} placeholder="0.00" className="font-mono text-right" />
         </Field>
+      </div>
+
+      <div className="grid sm:grid-cols-4 gap-3">
+        <Field label="Total PF (employee)">
+          <Input type="text" inputMode="decimal" value={totalPf} onChange={e => setTotalPf(e.target.value)} placeholder="0.00" className="font-mono text-right" />
+        </Field>
+        <Field label="Total PF (employer)">
+          <Input type="text" inputMode="decimal" value={totalPfEmployer} onChange={e => setTotalPfEmployer(e.target.value)} placeholder="0.00" className="font-mono text-right" />
+        </Field>
+        <Field label="Total CIT (employee)">
+          <Input type="text" inputMode="decimal" value={totalCit} onChange={e => setTotalCit(e.target.value)} placeholder="0.00" className="font-mono text-right" />
+        </Field>
+        <Field label="Total CIT (employer)">
+          <Input type="text" inputMode="decimal" value={totalCitEmployer} onChange={e => setTotalCitEmployer(e.target.value)} placeholder="0.00" className="font-mono text-right" />
+        </Field>
+      </div>
+
+      <div className="text-xs text-slate-500 bg-slate-50/60 border border-slate-200 rounded-lg px-3 py-2 flex items-center justify-between">
+        <span>Net pay (gross − TDS − SSF − employee PF − employee CIT)</span>
+        <span className="font-mono font-bold text-emerald-700">Rs. {net.toFixed(2)}</span>
       </div>
 
       <Field label="Pay from *">

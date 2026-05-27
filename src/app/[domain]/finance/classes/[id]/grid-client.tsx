@@ -89,8 +89,22 @@ export function ClassGridClient({
 
   function clearSelect() { setSelected(new Set()) }
 
-  const totalBilled = useMemo(() => rows.reduce((s, r) => s + parseFloat(r.finalAmount), 0), [rows])
-  const totalPaid   = useMemo(() => rows.reduce((s, r) => s + parseFloat(r.paidAmount),  0), [rows])
+  // Billed/Outstanding count issued rows only (BILLED/PARTIAL/PAID). PLANNED is
+  // scheduled-but-not-yet-issued — tracked separately so it never inflates dues.
+  // CANCELLED is excluded entirely.
+  const totals = useMemo(() => {
+    let billed = 0, paid = 0, planned = 0, outstanding = 0
+    for (const r of rows) {
+      if (r.status === "CANCELLED") continue
+      const final = parseFloat(r.finalAmount)
+      const p     = parseFloat(r.paidAmount)
+      if (r.status === "PLANNED") { planned += final; continue }
+      billed += final
+      paid   += p
+      if (r.status === "BILLED" || r.status === "PARTIAL") outstanding += Math.max(0, final - p)
+    }
+    return { billed, paid, planned, outstanding }
+  }, [rows])
 
   return (
     <div className="space-y-4">
@@ -140,10 +154,12 @@ export function ClassGridClient({
       </div>
 
       {/* KPI strip */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         <KPICard label="Students"    value={`${students.length}`} />
-        <KPICard label="Billed (FY)" value={`Rs. ${totalBilled.toFixed(2)}`} tone="slate" />
-        <KPICard label="Outstanding" value={`Rs. ${Math.max(0, totalBilled - totalPaid).toFixed(2)}`} tone={totalBilled - totalPaid > 0 ? "rose" : "emerald"} />
+        <KPICard label="Billed"      value={`Rs. ${totals.billed.toFixed(2)}`} tone="slate" />
+        <KPICard label="Collected"   value={`Rs. ${totals.paid.toFixed(2)}`} tone="emerald" />
+        <KPICard label="Outstanding" value={`Rs. ${totals.outstanding.toFixed(2)}`} tone={totals.outstanding > 0 ? "rose" : "emerald"} />
+        <KPICard label="Planned"     value={`Rs. ${totals.planned.toFixed(2)}`} tone="indigo" />
       </div>
 
       {/* Grid */}
@@ -202,11 +218,20 @@ export function ClassGridClient({
                       const final = list.reduce((sum, r) => sum + parseFloat(r.finalAmount), 0)
                       const paid  = list.reduce((sum, r) => sum + parseFloat(r.paidAmount),  0)
                       rowTotal += final
-                      const allPaid = list.every(r => r.status === "PAID")
-                      const anyOverdue = list.some(r => r.isOverdue && r.status !== "PAID")
-                      // Label = actual status by default; "OVERDUE" only when past due AND unpaid.
-                      // Tone (color) tracks the label.
-                      const label = allPaid ? "PAID" : anyOverdue ? "OVERDUE" : list[0].status
+                      // Aggregate status across every period in this cell. A roll-up of
+                      // "4 paid + 1 partial + 7 planned" must read PARTIAL — the old code fell
+                      // back to list[0].status, so it showed "PAID" for a column only partly paid.
+                      const allPaid      = list.every(r => r.status === "PAID")
+                      const allCancelled = list.every(r => r.status === "CANCELLED")
+                      const allPlanned   = list.every(r => r.status === "PLANNED")
+                      const anyOverdue   = list.some(r => r.isOverdue && r.status !== "PAID")
+                      const label =
+                        allPaid        ? "PAID"
+                        : allCancelled ? "CANCELLED"
+                        : paid > 0     ? "PARTIAL"
+                        : anyOverdue   ? "OVERDUE"
+                        : allPlanned   ? "PLANNED"
+                        :                "BILLED"
                       const tone  = label
                       const anySelected = list.some(r => selected.has(r.id))
                       return (
@@ -371,7 +396,7 @@ function BillPeriodSheet({
     start(async () => {
       try {
         const res = await billPeriod({ fiscalYearId, periodIndex, classId })
-        toast.success(`${res.billed} row${res.billed === 1 ? "" : "s"} billed with prefix ${res.voucherPrefix}`)
+        toast.success(`${res.billed} row${res.billed === 1 ? "" : "s"} marked as billed`)
         onSaved()
       } catch (e) { toast.error((e as Error).message) }
     })
@@ -489,8 +514,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function KPICard({ label, value, tone = "slate" }: { label: string; value: string; tone?: "slate" | "rose" | "emerald" }) {
-  const cls = { slate: "text-slate-700", rose: "text-rose-700", emerald: "text-emerald-700" }[tone]
+function KPICard({ label, value, tone = "slate" }: { label: string; value: string; tone?: "slate" | "rose" | "emerald" | "indigo" }) {
+  const cls = { slate: "text-slate-700", rose: "text-rose-700", emerald: "text-emerald-700", indigo: "text-indigo-700" }[tone]
   return (
     <div className="bg-white/70 backdrop-blur-xl rounded-xl border border-white/40 p-3">
       <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">{label}</p>

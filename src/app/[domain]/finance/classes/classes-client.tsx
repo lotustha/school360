@@ -2,12 +2,12 @@
 
 import { useMemo, useState } from "react"
 import Link from "next/link"
-import { Search, X, GraduationCap, ArrowRight, Users as UsersIcon, UserCog, Filter } from "lucide-react"
+import { Search, X, GraduationCap, ArrowRight, Users as UsersIcon, UserCog, Filter, AlertTriangle } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import type { ClassCard } from "./page"
 
-type SortKey = "name" | "outstanding" | "students" | "pct"
+type SortKey = "name" | "outstanding" | "overdue" | "students" | "pct"
 
 interface Props {
   cards:     ClassCard[]
@@ -35,6 +35,7 @@ export function ClassesClient({ cards, faculties }: Props) {
     list = [...list].sort((a, b) => {
       switch (sort) {
         case "outstanding": return b.outstanding - a.outstanding
+        case "overdue":     return b.overdueOutstanding - a.overdueOutstanding
         case "students":    return b.studentCount - a.studentCount
         case "pct":         return b.pct - a.pct
         case "name":
@@ -99,6 +100,7 @@ export function ClassesClient({ cards, faculties }: Props) {
         >
           <option value="name">Sort: Name</option>
           <option value="outstanding">Sort: Highest outstanding</option>
+          <option value="overdue">Sort: Most overdue</option>
           <option value="students">Sort: Most students</option>
           <option value="pct">Sort: Best collection %</option>
         </select>
@@ -138,7 +140,7 @@ function facultyNameOf(faculties: Array<{ id: string; name: string }>, id: strin
 }
 
 function ClassCardView({ c }: { c: ClassCard }) {
-  const overdueLooking = c.outstanding > 0
+  const hasOutstanding = c.outstanding > 0
   const billed = c.billed
   return (
     <Link href={`/finance/classes/${c.id}`} className="block group">
@@ -188,10 +190,18 @@ function ClassCardView({ c }: { c: ClassCard }) {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-2 mt-auto pt-3 border-t border-slate-100">
+        {c.overdueCount > 0 && (
+          <div className="mb-2 self-start inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-2 py-1">
+            <AlertTriangle className="w-3 h-3" />
+            {c.overdueCount} overdue · Rs {fmt(c.overdueOutstanding)}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2 mt-auto pt-3 border-t border-slate-100">
           <Stat label="Billed"      value={fmt(c.billed)}      tone="slate" />
           <Stat label="Paid"        value={fmt(c.paid)}        tone="emerald" />
-          <Stat label="Outstanding" value={fmt(c.outstanding)} tone={overdueLooking ? "rose" : "emerald"} />
+          <Stat label="Outstanding" value={fmt(c.outstanding)} tone={hasOutstanding ? "rose" : "emerald"} />
+          <Stat label="Planned"     value={fmt(c.planned)}     tone="indigo" />
         </div>
 
         <ArrowRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-primary group-hover:translate-x-0.5 transition mt-3 self-end" />
@@ -200,11 +210,12 @@ function ClassCardView({ c }: { c: ClassCard }) {
   )
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone: "slate" | "emerald" | "rose" }) {
+function Stat({ label, value, tone }: { label: string; value: string; tone: "slate" | "emerald" | "rose" | "indigo" }) {
   const cls = {
     slate:   "text-slate-700",
     emerald: "text-emerald-700",
     rose:    "text-rose-700",
+    indigo:  "text-indigo-700",
   }[tone]
   return (
     <div>

@@ -3,12 +3,9 @@
 import { useMemo, useState } from "react"
 import Link from "next/link"
 import { Search, Inbox, ReceiptText, Banknote, ArrowLeftRight, NotebookPen, Coins, Landmark } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { formatBS } from "@/lib/nepali-date"
-import type { CombinedBookRow } from "@/actions/accounting/reports"
-
-type Side = "ALL" | "CASH" | "BANK"
+import type { CombinedBookRow, CombinedBookAccount } from "@/actions/accounting/reports"
 
 const VOUCHER_ICON: Record<string, React.ElementType> = {
   RV: ReceiptText, PV: Banknote, CV: ArrowLeftRight, JV: NotebookPen,
@@ -21,32 +18,36 @@ const VOUCHER_TONE: Record<string, string> = {
 }
 
 interface Props {
-  rows:              CombinedBookRow[]
-  openingCash:       string
-  openingBank:       string
-  closingCash:       string
-  closingBank:       string
-  totalCashReceipts: string
-  totalCashPayments: string
-  totalBankReceipts: string
-  totalBankPayments: string
+  rows:     CombinedBookRow[]
+  accounts: CombinedBookAccount[]
 }
 
-export function CashBookClient({
-  rows, openingCash, openingBank, closingCash, closingBank,
-  totalCashReceipts, totalCashPayments, totalBankReceipts, totalBankPayments,
-}: Props) {
+function amt(v: string) {
+  return parseFloat(v) > 0 ? v : null
+}
+
+export function CashBookClient({ rows, accounts }: Props) {
   const [search, setSearch] = useState("")
-  const [side, setSide]     = useState<Side>("ALL")
+  const [visible, setVisible] = useState<Set<string>>(() => new Set(accounts.map(a => a.id)))
+
+  // Accounts to show as columns. If the user hides everything, fall back to all.
+  const shown = useMemo(() => {
+    const s = accounts.filter(a => visible.has(a.id))
+    return s.length ? s : accounts
+  }, [accounts, visible])
+  const allShown = shown.length === accounts.length
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
     return rows.filter(r => {
-      // Side filter: row must have at least one non-zero amount on the chosen side(s)
-      const hasCash = parseFloat(r.cashDr) > 0 || parseFloat(r.cashCr) > 0
-      const hasBank = parseFloat(r.bankDr) > 0 || parseFloat(r.bankCr) > 0
-      if (side === "CASH" && !hasCash) return false
-      if (side === "BANK" && !hasBank) return false
+      // Account filter: row must touch at least one shown account
+      if (!allShown) {
+        const hits = shown.some(a => {
+          const c = r.perAccount[a.id]
+          return c && (parseFloat(c.dr) > 0 || parseFloat(c.cr) > 0)
+        })
+        if (!hits) return false
+      }
       if (!q) return true
       return (
         (r.voucherNumber?.toLowerCase().includes(q) ?? false) ||
@@ -54,52 +55,71 @@ export function CashBookClient({
         r.voucherType.toLowerCase().includes(q)
       )
     })
-  }, [rows, side, search])
+  }, [rows, shown, allShown, search])
 
-  // Filtered totals (recompute against current view)
-  const totals = useMemo(() => {
-    return filteredRows.reduce((acc, r) => ({
-      cashDr: acc.cashDr + (parseFloat(r.cashDr) || 0),
-      cashCr: acc.cashCr + (parseFloat(r.cashCr) || 0),
-      bankDr: acc.bankDr + (parseFloat(r.bankDr) || 0),
-      bankCr: acc.bankCr + (parseFloat(r.bankCr) || 0),
-    }), { cashDr: 0, cashCr: 0, bankDr: 0, bankCr: 0 })
-  }, [filteredRows])
+  // Per-shown-account filtered subtotals
+  const subtotals = useMemo(() => {
+    const m: Record<string, { dr: number; cr: number }> = {}
+    for (const a of shown) m[a.id] = { dr: 0, cr: 0 }
+    for (const r of filteredRows) {
+      for (const a of shown) {
+        const c = r.perAccount[a.id]
+        if (c) { m[a.id].dr += parseFloat(c.dr) || 0; m[a.id].cr += parseFloat(c.cr) || 0 }
+      }
+    }
+    return m
+  }, [filteredRows, shown])
 
   const grouped = useMemo(() => {
     const byDate = new Map<string, CombinedBookRow[]>()
     for (const r of filteredRows) {
-      const k = r.dateBS
-      const arr = byDate.get(k) ?? []
+      const arr = byDate.get(r.dateBS) ?? []
       arr.push(r)
-      byDate.set(k, arr)
+      byDate.set(r.dateBS, arr)
     }
     return Array.from(byDate.entries()).sort((a, b) => a[0].localeCompare(b[0]))
   }, [filteredRows])
 
-  const showFilteredTotals = search.trim() !== "" || side !== "ALL"
+  const filterActive = search.trim() !== "" || !allShown
+  const fullSpan = 2 + shown.length * 3
+
+  function toggle(id: string) {
+    setVisible(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
 
   return (
     <div className="bg-white/70 backdrop-blur-xl rounded-2xl border border-white/40 shadow-sm overflow-hidden">
       {/* Filter toolbar */}
       <div className="px-5 py-3 border-b border-white/60 flex items-center gap-2 flex-wrap">
-        <div className="inline-flex bg-slate-100/60 rounded-lg p-0.5">
-          {(["ALL", "CASH", "BANK"] as const).map(s => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => setSide(s)}
-              className={cn(
-                "px-3 py-1.5 rounded-md text-xs font-bold cursor-pointer transition flex items-center gap-1.5",
-                side === s ? "bg-white shadow-sm text-primary" : "text-slate-500 hover:text-slate-700",
-              )}
-            >
-              {s === "CASH" && <Coins className="w-3 h-3" />}
-              {s === "BANK" && <Landmark className="w-3 h-3" />}
-              {s}
-            </button>
-          ))}
-        </div>
+        {accounts.length > 1 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {accounts.map(a => {
+              const on = visible.has(a.id)
+              const isCash = a.subType === "CASH"
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => toggle(a.id)}
+                  title={`${a.code} · ${a.name}`}
+                  className={cn(
+                    "px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition inline-flex items-center gap-1.5 border",
+                    on
+                      ? isCash ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-sky-50 text-sky-700 border-sky-200"
+                      : "bg-white/60 text-slate-400 border-slate-200 hover:text-slate-600",
+                  )}
+                >
+                  {isCash ? <Coins className="w-3 h-3" /> : <Landmark className="w-3 h-3" />}
+                  <span className="max-w-[10rem] truncate">{a.name}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
@@ -130,7 +150,7 @@ export function CashBookClient({
         <div className="p-16 text-center">
           <Search className="w-10 h-10 mx-auto text-slate-300 mb-3" />
           <p className="text-sm text-slate-600">No entries match the current filter.</p>
-          <button onClick={() => { setSearch(""); setSide("ALL") }} className="text-xs text-primary font-bold mt-2 hover:underline cursor-pointer">
+          <button onClick={() => { setSearch(""); setVisible(new Set(accounts.map(a => a.id))) }} className="text-xs text-primary font-bold mt-2 hover:underline cursor-pointer">
             Reset filter
           </button>
         </div>
@@ -141,37 +161,35 @@ export function CashBookClient({
               <tr>
                 <th rowSpan={2} className="px-3 py-2 text-left w-32 align-bottom">Voucher</th>
                 <th rowSpan={2} className="px-3 py-2 text-left align-bottom">Narration</th>
-                <th colSpan={2} className="px-3 py-1 text-center border-l border-slate-200 bg-emerald-50/60">
-                  <Coins className="w-3 h-3 inline mr-1 text-emerald-600" />
-                  Cash
-                </th>
-                <th colSpan={2} className="px-3 py-1 text-center border-l border-slate-200 bg-sky-50/60">
-                  <Landmark className="w-3 h-3 inline mr-1 text-sky-600" />
-                  Bank
-                </th>
-                <th rowSpan={2} className="px-3 py-2 text-right w-28 align-bottom border-l border-slate-200">Cash Bal</th>
-                <th rowSpan={2} className="px-3 py-2 text-right w-28 align-bottom">Bank Bal</th>
+                {shown.map(a => (
+                  <th key={a.id} colSpan={3} className={cn("px-3 py-1 text-center border-l border-slate-200", a.subType === "CASH" ? "bg-emerald-50/60" : "bg-sky-50/60")}>
+                    {a.subType === "CASH"
+                      ? <Coins className="w-3 h-3 inline mr-1 text-emerald-600" />
+                      : <Landmark className="w-3 h-3 inline mr-1 text-sky-600" />}
+                    {a.name}
+                    <span className="ml-1 font-mono text-[9px] text-slate-400">{a.code}</span>
+                  </th>
+                ))}
               </tr>
               <tr>
-                <th className="px-3 py-1 text-right w-24 border-l border-slate-200 bg-emerald-50/60" title="Debit — money in">Dr (In)</th>
-                <th className="px-3 py-1 text-right w-24 bg-emerald-50/60" title="Credit — money out">Cr (Out)</th>
-                <th className="px-3 py-1 text-right w-24 border-l border-slate-200 bg-sky-50/60" title="Debit — money in">Dr (In)</th>
-                <th className="px-3 py-1 text-right w-24 bg-sky-50/60" title="Credit — money out">Cr (Out)</th>
+                {shown.map(a => (
+                  <FragmentHeaders key={a.id} cash={a.subType === "CASH"} />
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100/60">
               {/* Opening row */}
               <tr className="bg-slate-50/60 font-semibold border-b border-slate-200">
                 <td colSpan={2} className="px-3 py-2 text-right text-[10px] uppercase tracking-widest text-slate-500">Opening balance</td>
-                <td colSpan={4}></td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">{openingCash}</td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">{openingBank}</td>
+                {shown.map(a => (
+                  <td key={a.id} colSpan={3} className="px-3 py-2 text-right font-mono tabular-nums border-l border-slate-100">{a.opening}</td>
+                ))}
               </tr>
 
               {/* Date-grouped rows */}
               {grouped.flatMap(([date, dateRows]) => [
                 <tr key={`hdr-${date}`} className="bg-slate-50/40 border-y border-slate-100/80">
-                  <td colSpan={8} className="px-3 py-1.5 text-[10px] uppercase tracking-widest font-black text-slate-500">
+                  <td colSpan={fullSpan} className="px-3 py-1.5 text-[10px] uppercase tracking-widest font-black text-slate-500">
                     {formatBS(date)}
                   </td>
                 </tr>,
@@ -189,46 +207,41 @@ export function CashBookClient({
                         </Link>
                       </td>
                       <td className="px-3 py-2 text-xs text-slate-600 max-w-xs truncate">{r.narration}</td>
-                      <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-700 font-semibold border-l border-slate-100">
-                        {parseFloat(r.cashDr) > 0 ? r.cashDr : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono tabular-nums text-rose-700 font-semibold">
-                        {parseFloat(r.cashCr) > 0 ? r.cashCr : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-700 font-semibold border-l border-slate-100">
-                        {parseFloat(r.bankDr) > 0 ? r.bankDr : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono tabular-nums text-rose-700 font-semibold">
-                        {parseFloat(r.bankCr) > 0 ? r.bankCr : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-700 border-l border-slate-100">{r.cashRunning}</td>
-                      <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-700">{r.bankRunning}</td>
+                      {shown.map(a => {
+                        const c = r.perAccount[a.id]
+                        return (
+                          <FragmentCells
+                            key={a.id}
+                            dr={c ? amt(c.dr) : null}
+                            cr={c ? amt(c.cr) : null}
+                            running={c?.running ?? a.opening}
+                          />
+                        )
+                      })}
                     </tr>
                   )
                 }),
               ])}
             </tbody>
             <tfoot className="bg-slate-50/80 font-bold sticky bottom-0 backdrop-blur-xl">
-              {showFilteredTotals && (
+              {filterActive && (
                 <tr>
-                  <td colSpan={2} className="px-3 py-2 text-right text-[10px] uppercase tracking-widest text-slate-500">
-                    Filtered subtotal
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-700 border-l border-slate-100">{totals.cashDr.toFixed(2)}</td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-rose-700">{totals.cashCr.toFixed(2)}</td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-700 border-l border-slate-100">{totals.bankDr.toFixed(2)}</td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-rose-700">{totals.bankCr.toFixed(2)}</td>
-                  <td colSpan={2}></td>
+                  <td colSpan={2} className="px-3 py-2 text-right text-[10px] uppercase tracking-widest text-slate-500">Filtered subtotal</td>
+                  {shown.map(a => (
+                    <FragmentCells
+                      key={a.id}
+                      dr={subtotals[a.id].dr > 0 ? subtotals[a.id].dr.toFixed(2) : null}
+                      cr={subtotals[a.id].cr > 0 ? subtotals[a.id].cr.toFixed(2) : null}
+                      running=""
+                    />
+                  ))}
                 </tr>
               )}
               <tr className="border-t-2 border-slate-200">
                 <td colSpan={2} className="px-3 py-2.5 text-right text-xs uppercase tracking-widest text-slate-500">Period totals</td>
-                <td className="px-3 py-2.5 text-right font-mono tabular-nums text-emerald-700 border-l border-slate-100">{totalCashReceipts}</td>
-                <td className="px-3 py-2.5 text-right font-mono tabular-nums text-rose-700">{totalCashPayments}</td>
-                <td className="px-3 py-2.5 text-right font-mono tabular-nums text-emerald-700 border-l border-slate-100">{totalBankReceipts}</td>
-                <td className="px-3 py-2.5 text-right font-mono tabular-nums text-rose-700">{totalBankPayments}</td>
-                <td className="px-3 py-2.5 text-right font-mono tabular-nums border-l border-slate-100 font-black">{closingCash}</td>
-                <td className="px-3 py-2.5 text-right font-mono tabular-nums font-black">{closingBank}</td>
+                {shown.map(a => (
+                  <FragmentCells key={a.id} dr={amt(a.receipts)} cr={amt(a.payments)} running={a.closing} runningBold />
+                ))}
               </tr>
             </tfoot>
           </table>
@@ -236,15 +249,38 @@ export function CashBookClient({
       )}
 
       {/* Footer tips */}
-      <div className="px-5 py-2.5 border-t border-slate-100/80 bg-slate-50/40 text-[11px] text-slate-500 flex items-center justify-between gap-2 flex-wrap">
-        <span>
-          <strong className="text-emerald-700">Dr (In)</strong> = money received ·
-          <strong className="text-rose-700 ml-1.5">Cr (Out)</strong> = money paid out
-        </span>
-        <span className="font-mono">
-          Cash {closingCash} · Bank {closingBank}
-        </span>
+      <div className="px-5 py-2.5 border-t border-slate-100/80 bg-slate-50/40 text-[11px] text-slate-500">
+        <strong className="text-emerald-700">Dr (In)</strong> = money received ·
+        <strong className="text-rose-700 ml-1.5">Cr (Out)</strong> = money paid out ·
+        <span className="ml-1.5">each cash/bank account is its own column — use the chips above to focus.</span>
       </div>
     </div>
+  )
+}
+
+/** The Dr / Cr / Bal sub-header trio for one account. */
+function FragmentHeaders({ cash }: { cash: boolean }) {
+  const bg = cash ? "bg-emerald-50/60" : "bg-sky-50/60"
+  return (
+    <>
+      <th className={cn("px-3 py-1 text-right w-24 border-l border-slate-200", bg)} title="Debit — money in">Dr (In)</th>
+      <th className={cn("px-3 py-1 text-right w-24", bg)} title="Credit — money out">Cr (Out)</th>
+      <th className={cn("px-3 py-1 text-right w-28", bg)} title="Running balance">Balance</th>
+    </>
+  )
+}
+
+/** The Dr / Cr / Bal cell trio for one account in a row. */
+function FragmentCells({ dr, cr, running, runningBold }: { dr: string | null; cr: string | null; running: string; runningBold?: boolean }) {
+  return (
+    <>
+      <td className="px-3 py-2 text-right font-mono tabular-nums text-emerald-700 font-semibold border-l border-slate-100">
+        {dr ?? <span className="text-slate-300">—</span>}
+      </td>
+      <td className="px-3 py-2 text-right font-mono tabular-nums text-rose-700 font-semibold">
+        {cr ?? <span className="text-slate-300">—</span>}
+      </td>
+      <td className={cn("px-3 py-2 text-right font-mono tabular-nums text-slate-700", runningBold && "font-black")}>{running}</td>
+    </>
   )
 }

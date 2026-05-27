@@ -11,11 +11,15 @@ import { resolveFiscalYearForDate } from "@/actions/accounting/fiscal-years"
 const D = Prisma.Decimal
 
 const lineSchema = z.object({
-  employeeId: z.string().min(1),
-  gross:      z.string().regex(/^\d+(\.\d{1,2})?$/),
-  tds:        z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
-  ssf:        z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
-  remarks:    z.string().max(255).nullable().optional(),
+  employeeId:  z.string().min(1),
+  gross:       z.string().regex(/^\d+(\.\d{1,2})?$/),
+  tds:         z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  ssf:         z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),
+  pf:          z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),  // employee Provident Fund
+  pfEmployer:  z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),  // employer PF match
+  cit:         z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),  // employee Citizen Investment Trust
+  citEmployer: z.string().regex(/^\d+(\.\d{1,2})?$/).default("0"),  // employer CIT contribution
+  remarks:     z.string().max(255).nullable().optional(),
 })
 
 const runSchema = z.object({
@@ -27,9 +31,43 @@ const runSchema = z.object({
   lines:          z.array(lineSchema).min(1, "At least one employee line is required"),
 })
 
-const SALARY_CODE      = "5100"
-const TDS_PAYABLE_CODE = "2130"
-const SSF_PAYABLE_CODE = "2140"
+const SALARY_CODE           = "5100"
+const TDS_PAYABLE_CODE      = "2130"
+const SSF_PAYABLE_CODE      = "2140"
+const PF_PAYABLE_CODE       = "2145"
+const CIT_PAYABLE_CODE      = "2146"
+const EMPLOYER_CONTRIB_CODE = "5150"
+
+/**
+ * Idempotently ensure the PF/CIT payable + employer-contribution expense accounts
+ * exist for a school, backfilling schools provisioned before these were added.
+ * Returns the resolved account IDs. Never clobbers a user-edited account (update: {}).
+ */
+export async function ensurePayrollAccounts(schoolId: string) {
+  const parents = await prisma.account.findMany({
+    where:  { schoolId, code: { in: ["2100", "5000"] } },
+    select: { id: true, code: true },
+  })
+  const liabParent = parents.find(p => p.code === "2100")?.id ?? null
+  const expParent  = parents.find(p => p.code === "5000")?.id ?? null
+
+  const defs = [
+    { code: PF_PAYABLE_CODE,       name: "PF Payable",                     type: "LIABILITY", subType: "PAYABLE",           parentId: liabParent },
+    { code: CIT_PAYABLE_CODE,      name: "CIT Payable",                    type: "LIABILITY", subType: "PAYABLE",           parentId: liabParent },
+    { code: EMPLOYER_CONTRIB_CODE, name: "Employer Contributions (PF/CIT)", type: "EXPENSE",  subType: "OPERATING_EXPENSE", parentId: expParent },
+  ]
+  const ids: Record<string, string> = {}
+  for (const d of defs) {
+    const acc = await prisma.account.upsert({
+      where:  { schoolId_code: { schoolId, code: d.code } },
+      create: { schoolId, code: d.code, name: d.name, type: d.type, subType: d.subType, parentId: d.parentId, isSystem: true },
+      update: {},
+      select: { id: true },
+    })
+    ids[d.code] = acc.id
+  }
+  return { pfId: ids[PF_PAYABLE_CODE], citId: ids[CIT_PAYABLE_CODE], employerId: ids[EMPLOYER_CONTRIB_CODE] }
+}
 
 export interface RunPayrollResult {
   id:            string
@@ -39,6 +77,8 @@ export interface RunPayrollResult {
   totalGross:    string
   totalTds:      string
   totalSsf:      string
+  totalPf:       string
+  totalCit:      string
   totalNet:      string
 }
 
@@ -69,6 +109,9 @@ export async function runPayroll(input: z.infer<typeof runSchema>): Promise<RunP
   if (!tdsPay) throw new Error(`Account ${TDS_PAYABLE_CODE} (TDS Payable) not found`)
   if (!ssfPay) throw new Error(`Account ${SSF_PAYABLE_CODE} (SSF Payable) not found`)
 
+  // PF/CIT payable + employer-contribution expense accounts (created on demand).
+  const { pfId, citId, employerId } = await ensurePayrollAccounts(schoolId)
+
   // Resolve source (Cash or specific Bank)
   let sourceAccountId: string
   let sourceBankAccountId: string | null = null
@@ -86,18 +129,26 @@ export async function runPayroll(input: z.infer<typeof runSchema>): Promise<RunP
     sourceBankAccountId = bank.id
   }
 
-  // Aggregate totals from lines
+  // Aggregate totals from lines. Net = gross − employee deductions (tds/ssf/pf/cit).
+  // Employer PF/CIT contributions are an extra cost — they don't reduce net pay.
   let totalGross = new D(0), totalTds = new D(0), totalSsf = new D(0)
+  let totalPf = new D(0), totalPfEmployer = new D(0), totalCit = new D(0), totalCitEmployer = new D(0)
   const computedLines = data.lines.map(l => {
     const g = new D(l.gross), t = new D(l.tds), s = new D(l.ssf)
-    const n = g.minus(t).minus(s)
-    if (n.lessThan(0)) throw new Error("Net cannot be negative — check TDS/SSF for an employee")
-    totalGross = totalGross.add(g)
-    totalTds   = totalTds.add(t)
-    totalSsf   = totalSsf.add(s)
-    return { ...l, grossD: g, tdsD: t, ssfD: s, netD: n }
+    const pf = new D(l.pf), pfE = new D(l.pfEmployer), cit = new D(l.cit), citE = new D(l.citEmployer)
+    const n = g.minus(t).minus(s).minus(pf).minus(cit)
+    if (n.lessThan(0)) throw new Error("Net cannot be negative — check deductions for an employee")
+    totalGross       = totalGross.add(g)
+    totalTds         = totalTds.add(t)
+    totalSsf         = totalSsf.add(s)
+    totalPf          = totalPf.add(pf)
+    totalPfEmployer  = totalPfEmployer.add(pfE)
+    totalCit         = totalCit.add(cit)
+    totalCitEmployer = totalCitEmployer.add(citE)
+    return { ...l, grossD: g, tdsD: t, ssfD: s, pfD: pf, pfEmpD: pfE, citD: cit, citEmpD: citE, netD: n }
   })
-  const totalNet = totalGross.minus(totalTds).minus(totalSsf)
+  const totalNet      = totalGross.minus(totalTds).minus(totalSsf).minus(totalPf).minus(totalCit)
+  const totalEmployer = totalPfEmployer.add(totalCitEmployer)
   if (totalGross.lessThanOrEqualTo(0)) throw new Error("Total gross must be > 0")
 
   // Verify employee IDs belong to school (and dedupe)
@@ -149,6 +200,30 @@ export async function runPayroll(input: z.infer<typeof runSchema>): Promise<RunP
         narration: "SSF withheld",
       })
     }
+    // Employer PF/CIT match — extra expense (Dr), remitted alongside the employee portion.
+    if (totalEmployer.greaterThan(0)) {
+      voucherLines.push({
+        schoolId, accountId: employerId, lineNo: lineNo++,
+        debit: totalEmployer, credit: new D(0),
+        narration: "Employer PF/CIT contribution",
+      })
+    }
+    const pfRemit = totalPf.add(totalPfEmployer)
+    if (pfRemit.greaterThan(0)) {
+      voucherLines.push({
+        schoolId, accountId: pfId, lineNo: lineNo++,
+        debit: new D(0), credit: pfRemit,
+        narration: "Provident Fund (employee + employer)",
+      })
+    }
+    const citRemit = totalCit.add(totalCitEmployer)
+    if (citRemit.greaterThan(0)) {
+      voucherLines.push({
+        schoolId, accountId: citId, lineNo: lineNo++,
+        debit: new D(0), credit: citRemit,
+        narration: "Citizen Investment Trust (employee + employer)",
+      })
+    }
     voucherLines.push({
       schoolId, accountId: sourceAccountId, lineNo: lineNo++,
       debit: new D(0), credit: totalNet,
@@ -167,7 +242,7 @@ export async function runPayroll(input: z.infer<typeof runSchema>): Promise<RunP
         narration:    data.notes?.trim() || `Salary payroll — ${data.periodLabel} (${runNumber})`,
         status:       "POSTED",
         partyType:    null,
-        totalAmount:  totalGross,
+        totalAmount:  totalGross.add(totalEmployer),
         tdsBase:      totalTds.greaterThan(0) ? totalGross : null,
         tdsAmount:    totalTds.greaterThan(0) ? totalTds   : null,
         postedAt:     new Date(),
@@ -190,6 +265,10 @@ export async function runPayroll(input: z.infer<typeof runSchema>): Promise<RunP
         totalGross,
         totalTds,
         totalSsf,
+        totalPf,
+        totalPfEmployer,
+        totalCit,
+        totalCitEmployer,
         totalNet,
         voucherId:     voucher.id,
         bankAccountId: sourceBankAccountId,
@@ -200,12 +279,16 @@ export async function runPayroll(input: z.infer<typeof runSchema>): Promise<RunP
         postedById:    session.user.id,
         lines: {
           create: computedLines.map(l => ({
-            employeeId: l.employeeId,
-            gross:      l.grossD,
-            tds:        l.tdsD,
-            ssf:        l.ssfD,
-            net:        l.netD,
-            remarks:    l.remarks ?? null,
+            employeeId:  l.employeeId,
+            gross:       l.grossD,
+            tds:         l.tdsD,
+            ssf:         l.ssfD,
+            pf:          l.pfD,
+            pfEmployer:  l.pfEmpD,
+            cit:         l.citD,
+            citEmployer: l.citEmpD,
+            net:         l.netD,
+            remarks:     l.remarks ?? null,
           })),
         },
       },
@@ -220,6 +303,8 @@ export async function runPayroll(input: z.infer<typeof runSchema>): Promise<RunP
       totalGross:    totalGross.toFixed(2),
       totalTds:      totalTds.toFixed(2),
       totalSsf:      totalSsf.toFixed(2),
+      totalPf:       totalPf.toFixed(2),
+      totalCit:      totalCit.toFixed(2),
       totalNet:      totalNet.toFixed(2),
     }
   })
@@ -286,6 +371,10 @@ export interface PayrollRunDetail {
   totalGross:    string
   totalTds:      string
   totalSsf:      string
+  totalPf:          string
+  totalPfEmployer:  string
+  totalCit:         string
+  totalCitEmployer: string
   totalNet:      string
   notes:         string | null
   voucherId:     string | null
@@ -299,6 +388,10 @@ export interface PayrollRunDetail {
     gross:        string
     tds:          string
     ssf:          string
+    pf:           string
+    pfEmployer:   string
+    cit:          string
+    citEmployer:  string
     net:          string
     remarks:      string | null
   }>
@@ -331,6 +424,10 @@ export async function getPayrollRun(id: string): Promise<PayrollRunDetail | null
     totalGross:    r.totalGross.toFixed(2),
     totalTds:      r.totalTds.toFixed(2),
     totalSsf:      r.totalSsf.toFixed(2),
+    totalPf:          r.totalPf.toFixed(2),
+    totalPfEmployer:  r.totalPfEmployer.toFixed(2),
+    totalCit:         r.totalCit.toFixed(2),
+    totalCitEmployer: r.totalCitEmployer.toFixed(2),
     totalNet:      r.totalNet.toFixed(2),
     notes:         r.notes,
     voucherId:     r.voucher?.id ?? null,
@@ -344,6 +441,10 @@ export async function getPayrollRun(id: string): Promise<PayrollRunDetail | null
       gross:        l.gross.toFixed(2),
       tds:          l.tds.toFixed(2),
       ssf:          l.ssf.toFixed(2),
+      pf:           l.pf.toFixed(2),
+      pfEmployer:   l.pfEmployer.toFixed(2),
+      cit:          l.cit.toFixed(2),
+      citEmployer:  l.citEmployer.toFixed(2),
       net:          l.net.toFixed(2),
       remarks:      l.remarks,
     })),

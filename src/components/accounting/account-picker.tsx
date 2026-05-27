@@ -24,6 +24,13 @@ interface Props {
   /** Compact mode for table cells: borderless until hover/focus */
   compact?:     boolean
   disabled?:    boolean
+  /**
+   * Where to portal the dropdown. Defaults to the nearest [role="dialog"]
+   * ancestor (so the search box + options live inside a Radix Sheet/Dialog
+   * focus scope and dismissable layer), falling back to document.body. Pass an
+   * explicit element to override.
+   */
+  container?:   HTMLElement | null
 }
 
 const TYPE_BADGE: Record<string, string> = {
@@ -45,13 +52,14 @@ const TYPE_BADGE: Record<string, string> = {
  */
 export function AccountPicker({
   value, onChange, accounts, placeholder = "Select account…",
-  filter, className, compact, disabled,
+  filter, className, compact, disabled, container,
 }: Props) {
   const [open, setOpen]           = useState(false)
   const [query, setQuery]         = useState("")
   const [highlight, setHighlight] = useState(0)
   const [mounted, setMounted]     = useState(false)
   const [pos, setPos]             = useState<{ top: number; left: number; width: number } | null>(null)
+  const [portalEl, setPortalEl]   = useState<HTMLElement | null>(null)
   const triggerRef  = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const searchRef   = useRef<HTMLInputElement>(null)
@@ -204,7 +212,16 @@ export function AccountPicker({
         ref={triggerRef}
         type="button"
         disabled={disabled}
-        onClick={() => !disabled && setOpen(o => !o)}
+        onClick={() => {
+          if (disabled) return
+          // Resolve the portal target in the same batch as opening so the
+          // dropdown renders into the right container on its first frame.
+          if (!open) {
+            const dialog = triggerRef.current?.closest<HTMLElement>('[role="dialog"]')
+            setPortalEl(container ?? dialog ?? document.body)
+          }
+          setOpen(o => !o)
+        }}
         className={cn(
           "w-full flex items-center justify-between gap-2 text-left rounded-lg transition-colors outline-none",
           compact
@@ -226,8 +243,8 @@ export function AccountPicker({
         <ChevronDown className={cn("w-3.5 h-3.5 text-slate-400 flex-shrink-0 transition-transform", open && "rotate-180")} />
       </button>
 
-      {/* Portaled dropdown — escapes all stacking contexts */}
-      {dropdownEl && createPortal(dropdownEl, document.body)}
+      {/* Portaled dropdown — into the nearest dialog if any, else document.body */}
+      {dropdownEl && createPortal(dropdownEl, portalEl ?? document.body)}
     </div>
   )
 }

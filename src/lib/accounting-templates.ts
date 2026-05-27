@@ -99,9 +99,16 @@ export interface PaySalaryInput extends CommonArgs {
   gross:               string   // total salary
   tdsAmount?:          string   // optional, can be 0
   ssfAmount?:          string   // optional, can be 0
-  salaryAccountId:     string   // 5100 Salaries & Allowances
-  tdsPayableAccountId: string   // 2130 TDS Payable
-  ssfPayableAccountId: string   // 2140 SSF Payable
+  pfAmount?:           string   // employee Provident Fund
+  pfEmployerAmount?:   string   // employer PF match
+  citAmount?:          string   // employee Citizen Investment Trust
+  citEmployerAmount?:  string   // employer CIT contribution
+  salaryAccountId:         string   // 5100 Salaries & Allowances
+  tdsPayableAccountId:     string   // 2130 TDS Payable
+  ssfPayableAccountId:     string   // 2140 SSF Payable
+  pfPayableAccountId?:     string   // 2145 PF Payable
+  citPayableAccountId?:    string   // 2146 CIT Payable
+  employerContribAccountId?: string // 5150 Employer Contributions
   sourceAccountId:     string   // Cash or Bank (for net pay)
 }
 
@@ -109,13 +116,21 @@ export function buildPaySalary(a: PaySalaryInput): VoucherInput {
   const gross = parseFloat(a.gross || "0") || 0
   const tds   = parseFloat(a.tdsAmount || "0") || 0
   const ssf   = parseFloat(a.ssfAmount || "0") || 0
-  const net   = (gross - tds - ssf).toFixed(2)
+  const pf    = parseFloat(a.pfAmount || "0") || 0
+  const pfE   = parseFloat(a.pfEmployerAmount || "0") || 0
+  const cit   = parseFloat(a.citAmount || "0") || 0
+  const citE  = parseFloat(a.citEmployerAmount || "0") || 0
+  const net   = (gross - tds - ssf - pf - cit).toFixed(2)
+  const employer = pfE + citE
 
   const lines: VoucherInput["lines"] = [
     { accountId: a.salaryAccountId, debit: a.gross, credit: "0", partyType: "EMPLOYEE", partyName: a.employeeName } as never,
   ]
+  if (employer > 0 && a.employerContribAccountId) lines.push({ accountId: a.employerContribAccountId, debit: employer.toFixed(2), credit: "0" })
   if (tds > 0) lines.push({ accountId: a.tdsPayableAccountId, debit: "0", credit: a.tdsAmount! })
   if (ssf > 0) lines.push({ accountId: a.ssfPayableAccountId, debit: "0", credit: a.ssfAmount! })
+  if (pf + pfE > 0 && a.pfPayableAccountId)   lines.push({ accountId: a.pfPayableAccountId,  debit: "0", credit: (pf + pfE).toFixed(2) })
+  if (cit + citE > 0 && a.citPayableAccountId) lines.push({ accountId: a.citPayableAccountId, debit: "0", credit: (cit + citE).toFixed(2) })
   lines.push({ accountId: a.sourceAccountId, debit: "0", credit: net })
 
   return {
@@ -274,24 +289,39 @@ export interface SalaryPayrollInput extends CommonArgs {
   totalGross:          string
   totalTds:            string  // may be "0"
   totalSsf:            string  // may be "0"
+  totalPf?:            string  // employee Provident Fund
+  totalPfEmployer?:    string  // employer PF match
+  totalCit?:           string  // employee Citizen Investment Trust
+  totalCitEmployer?:   string  // employer CIT contribution
   salaryAccountId:     string
   tdsPayableAccountId: string
   ssfPayableAccountId: string
+  pfPayableAccountId?:     string  // 2145 PF Payable
+  citPayableAccountId?:    string  // 2146 CIT Payable
+  employerContribAccountId?: string // 5150 Employer Contributions
   sourceAccountId:     string  // Cash or Bank
 }
 
-/** Monthly payroll lump sum. Dr Salary (gross), Cr TDS Payable, Cr SSF Payable, Cr Cash/Bank (net). */
+/** Monthly payroll lump sum. Dr Salary (+ Dr Employer PF/CIT), Cr TDS/SSF/PF/CIT Payable, Cr Cash/Bank (net). */
 export function buildSalaryPayroll(a: SalaryPayrollInput): VoucherInput {
   const gross = parseFloat(a.totalGross || "0") || 0
   const tds   = parseFloat(a.totalTds   || "0") || 0
   const ssf   = parseFloat(a.totalSsf   || "0") || 0
-  const net   = (gross - tds - ssf).toFixed(2)
+  const pf    = parseFloat(a.totalPf    || "0") || 0
+  const pfE   = parseFloat(a.totalPfEmployer  || "0") || 0
+  const cit   = parseFloat(a.totalCit   || "0") || 0
+  const citE  = parseFloat(a.totalCitEmployer || "0") || 0
+  const net   = (gross - tds - ssf - pf - cit).toFixed(2)
+  const employer = pfE + citE
 
   const lines: VoucherInput["lines"] = [
     { accountId: a.salaryAccountId, debit: a.totalGross, credit: "0" },
   ]
+  if (employer > 0 && a.employerContribAccountId) lines.push({ accountId: a.employerContribAccountId, debit: employer.toFixed(2), credit: "0" })
   if (tds > 0) lines.push({ accountId: a.tdsPayableAccountId, debit: "0", credit: a.totalTds })
   if (ssf > 0) lines.push({ accountId: a.ssfPayableAccountId, debit: "0", credit: a.totalSsf })
+  if (pf + pfE > 0 && a.pfPayableAccountId)   lines.push({ accountId: a.pfPayableAccountId,  debit: "0", credit: (pf + pfE).toFixed(2) })
+  if (cit + citE > 0 && a.citPayableAccountId) lines.push({ accountId: a.citPayableAccountId, debit: "0", credit: (cit + citE).toFixed(2) })
   lines.push({ accountId: a.sourceAccountId, debit: "0", credit: net })
 
   return {

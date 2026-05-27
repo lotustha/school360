@@ -362,7 +362,7 @@ export function CollectFeeClient({ fiscalYearName, banks, preselectedStudent }: 
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <KPI label="Outstanding" value={`Rs. ${outstandingTotal.toFixed(2)}`} tone={outstandingTotal > 0 ? "rose" : "emerald"} />
+            <KPI label="Collectable" value={`Rs. ${outstandingTotal.toFixed(2)}`} tone={outstandingTotal > 0 ? "rose" : "emerald"} />
             <Link href={`/finance/students/${student.id}`} className="text-[11px] font-bold text-primary hover:underline cursor-pointer whitespace-nowrap">View schedule →</Link>
             <button onClick={clearStudent} type="button" className="text-xs text-slate-400 hover:text-rose-600 cursor-pointer whitespace-nowrap">Change</button>
           </div>
@@ -420,7 +420,7 @@ export function CollectFeeClient({ fiscalYearName, banks, preselectedStudent }: 
 
             {!loadingBills && bills.length === 0 ? (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-6 text-center">
-                <p className="text-sm font-bold text-emerald-700">No outstanding bills</p>
+                <p className="text-sm font-bold text-emerald-700">Nothing to collect</p>
                 <p className="text-xs text-emerald-600/80 mt-1">This student is fully paid up. You can still add ad-hoc charges below.</p>
               </div>
             ) : (
@@ -449,7 +449,7 @@ export function CollectFeeClient({ fiscalYearName, banks, preselectedStudent }: 
                 ))}
                 <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 flex items-center justify-between text-xs">
                   <span className="font-bold text-slate-500 uppercase tracking-widest text-[10px]">Bills total</span>
-                  <span className="font-mono tabular-nums font-black text-base text-slate-900">Rs. {billTotal.toFixed(2)} <span className="text-slate-400 text-[10px] font-normal">/ Rs. {outstandingTotal.toFixed(2)} outstanding</span></span>
+                  <span className="font-mono tabular-nums font-black text-base text-slate-900">Rs. {billTotal.toFixed(2)} <span className="text-slate-400 text-[10px] font-normal">/ Rs. {outstandingTotal.toFixed(2)} collectable</span></span>
                 </div>
               </div>
             )}

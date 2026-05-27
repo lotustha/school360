@@ -53,10 +53,12 @@ export default async function PayrollRunDetailPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
         <Stat label="Total Gross" value={`Rs. ${r.totalGross}`} color="slate" />
         <Stat label="TDS"        value={`Rs. ${r.totalTds}`}   color="rose" />
         <Stat label="SSF"        value={`Rs. ${r.totalSsf}`}   color="violet" />
+        <Stat label="PF"         value={`Rs. ${r.totalPf}`}    color="indigo" />
+        <Stat label="CIT"        value={`Rs. ${r.totalCit}`}   color="indigo" />
         <Stat label="Net Paid"   value={`Rs. ${r.totalNet}`}   color="emerald" />
       </div>
 
@@ -64,15 +66,20 @@ export default async function PayrollRunDetailPage({
         <div className="px-5 py-3 border-b border-white/60">
           <p className="font-semibold text-sm">Salary Register</p>
         </div>
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[1000px]">
           <thead className="bg-slate-50/60 text-[10px] uppercase tracking-widest text-slate-500 font-black">
             <tr>
               <th className="px-4 py-3 text-left">Employee</th>
-              <th className="px-4 py-3 text-left w-28">PAN</th>
-              <th className="px-4 py-3 text-right w-28">Gross</th>
-              <th className="px-4 py-3 text-right w-28">TDS</th>
-              <th className="px-4 py-3 text-right w-28">SSF</th>
-              <th className="px-4 py-3 text-right w-28">Net</th>
+              <th className="px-4 py-3 text-left w-24">PAN</th>
+              <th className="px-4 py-3 text-right w-24">Gross</th>
+              <th className="px-4 py-3 text-right w-20">TDS</th>
+              <th className="px-4 py-3 text-right w-20">SSF</th>
+              <th className="px-4 py-3 text-right w-20">PF</th>
+              <th className="px-4 py-3 text-right w-20" title="Employer PF match">PF (Er)</th>
+              <th className="px-4 py-3 text-right w-20">CIT</th>
+              <th className="px-4 py-3 text-right w-20" title="Employer CIT contribution">CIT (Er)</th>
+              <th className="px-4 py-3 text-right w-24">Net</th>
               <th className="px-4 py-3 text-left">Remarks</th>
             </tr>
           </thead>
@@ -87,6 +94,10 @@ export default async function PayrollRunDetailPage({
                 <td className="px-4 py-2 text-right font-mono tabular-nums">{l.gross}</td>
                 <td className="px-4 py-2 text-right font-mono tabular-nums text-rose-700">{parseFloat(l.tds) > 0 ? l.tds : ""}</td>
                 <td className="px-4 py-2 text-right font-mono tabular-nums text-violet-700">{parseFloat(l.ssf) > 0 ? l.ssf : ""}</td>
+                <td className="px-4 py-2 text-right font-mono tabular-nums text-indigo-700">{parseFloat(l.pf) > 0 ? l.pf : ""}</td>
+                <td className="px-4 py-2 text-right font-mono tabular-nums text-slate-400">{parseFloat(l.pfEmployer) > 0 ? l.pfEmployer : ""}</td>
+                <td className="px-4 py-2 text-right font-mono tabular-nums text-indigo-700">{parseFloat(l.cit) > 0 ? l.cit : ""}</td>
+                <td className="px-4 py-2 text-right font-mono tabular-nums text-slate-400">{parseFloat(l.citEmployer) > 0 ? l.citEmployer : ""}</td>
                 <td className="px-4 py-2 text-right font-mono tabular-nums font-bold text-emerald-700">{l.net}</td>
                 <td className="px-4 py-2 text-xs text-muted-foreground">{l.remarks ?? ""}</td>
               </tr>
@@ -98,12 +109,23 @@ export default async function PayrollRunDetailPage({
               <td className="px-4 py-2.5 text-right font-mono tabular-nums">{r.totalGross}</td>
               <td className="px-4 py-2.5 text-right font-mono tabular-nums text-rose-700">{r.totalTds}</td>
               <td className="px-4 py-2.5 text-right font-mono tabular-nums text-violet-700">{r.totalSsf}</td>
+              <td className="px-4 py-2.5 text-right font-mono tabular-nums text-indigo-700">{r.totalPf}</td>
+              <td className="px-4 py-2.5 text-right font-mono tabular-nums text-slate-400">{r.totalPfEmployer}</td>
+              <td className="px-4 py-2.5 text-right font-mono tabular-nums text-indigo-700">{r.totalCit}</td>
+              <td className="px-4 py-2.5 text-right font-mono tabular-nums text-slate-400">{r.totalCitEmployer}</td>
               <td className="px-4 py-2.5 text-right font-mono tabular-nums text-emerald-700">{r.totalNet}</td>
               <td></td>
             </tr>
           </tfoot>
         </table>
+        </div>
       </div>
+
+      {(parseFloat(r.totalPfEmployer) > 0 || parseFloat(r.totalCitEmployer) > 0) && (
+        <p className="text-xs text-muted-foreground">
+          Employer contribution (extra cost, not deducted from net): PF Rs. {r.totalPfEmployer} · CIT Rs. {r.totalCitEmployer} — posted to <strong>Employer Contributions</strong> expense.
+        </p>
+      )}
 
       {r.notes && (
         <div className="bg-slate-50/60 border border-slate-200 rounded-lg p-4">
@@ -115,12 +137,13 @@ export default async function PayrollRunDetailPage({
   )
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color: "slate" | "rose" | "violet" | "emerald" }) {
+function Stat({ label, value, color }: { label: string; value: string; color: "slate" | "rose" | "violet" | "emerald" | "indigo" }) {
   const palette = {
     slate:   { bg: "bg-slate-100",   text: "text-slate-700" },
     rose:    { bg: "bg-rose-50",     text: "text-rose-700"  },
     violet:  { bg: "bg-violet-50",   text: "text-violet-700"},
     emerald: { bg: "bg-emerald-50",  text: "text-emerald-700"},
+    indigo:  { bg: "bg-indigo-50",   text: "text-indigo-700"},
   }[color]
   return (
     <div className={cn("rounded-xl border border-white/40 shadow-sm p-4", palette.bg)}>

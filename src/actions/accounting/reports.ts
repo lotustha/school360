@@ -104,6 +104,47 @@ export async function getTrialBalance(fiscalYearId: string, asOfBS?: string): Pr
   }
 }
 
+/**
+ * Current balance for each CASH-subtype account in the fiscal year
+ * (opening balance + posted/reversed activity, debit − credit since cash is an asset).
+ * Used by Quick Entry's "Deposit Cash to Bank" to prefill the amount with cash on hand.
+ * Returns a map of accountId → balance string (may be negative).
+ */
+export async function getCashBalances(fiscalYearId: string): Promise<Record<string, string>> {
+  const session = await requirePermission("finance:view")
+  const schoolId = session.user.schoolId!
+
+  const fy = await prisma.fiscalYear.findUnique({ where: { id: fiscalYearId } })
+  if (!fy || fy.schoolId !== schoolId) return {}
+
+  const cashAccts = await prisma.account.findMany({
+    where:  { schoolId, subType: "CASH", isActive: true },
+    select: { id: true },
+  })
+  const ids = cashAccts.map(a => a.id)
+  if (ids.length === 0) return {}
+
+  const [openings, jeAgg] = await Promise.all([
+    prisma.openingBalance.findMany({ where: { schoolId, fiscalYearId, accountId: { in: ids } } }),
+    prisma.journalEntry.groupBy({
+      by:    ["accountId"],
+      where: { schoolId, accountId: { in: ids }, voucher: { fiscalYearId, status: { in: ["POSTED", "REVERSED"] } } },
+      _sum:  { debit: true, credit: true },
+    }),
+  ])
+
+  const openByAcc = new Map(openings.map(o => [o.accountId, { dr: o.debit, cr: o.credit }]))
+  const actByAcc  = new Map(jeAgg.map(g => [g.accountId, { dr: g._sum.debit ?? ZERO, cr: g._sum.credit ?? ZERO }]))
+
+  const out: Record<string, string> = {}
+  for (const id of ids) {
+    const op = openByAcc.get(id) ?? { dr: ZERO, cr: ZERO }
+    const ac = actByAcc.get(id)  ?? { dr: ZERO, cr: ZERO }
+    out[id] = op.dr.add(ac.dr).minus(op.cr).minus(ac.cr).toFixed(2)
+  }
+  return out
+}
+
 export interface LedgerRow {
   date:    Date
   dateBS:  string
@@ -471,23 +512,41 @@ export async function listBankAccounts() {
 
 // ─── Combined Cash + Bank double-column book ───────────────────────────────
 
+/** One account's debit/credit/running for a single voucher row. */
+export interface CombinedBookCell {
+  dr:      string
+  cr:      string
+  running: string
+}
+
 export interface CombinedBookRow {
   dateBS:        string
   voucherId:     string
   voucherNumber: string | null
   voucherType:   string
   narration:     string
-  cashDr:        string
-  cashCr:        string
-  bankDr:        string
-  bankCr:        string
-  cashRunning:   string
-  bankRunning:   string
+  /** Per cash/bank account, keyed by accountId. Untouched accounts carry the running balance forward (dr/cr = 0). */
+  perAccount:    Record<string, CombinedBookCell>
+}
+
+/** A cash or bank account column in the combined book, with its own opening/closing. */
+export interface CombinedBookAccount {
+  id:       string
+  code:     string
+  name:     string
+  subType:  "CASH" | "BANK"
+  opening:  string
+  closing:  string
+  receipts: string
+  payments: string
 }
 
 export interface CombinedCashBookResult {
   fromBS:           string
   toBS:             string
+  /** Each cash/bank account broken out individually (cash first, then banks, by code). */
+  accounts:         CombinedBookAccount[]
+  // Summed CASH vs BANK totals — retained for the KPI cards.
   openingCash:      string
   openingBank:      string
   totalCashReceipts: string
@@ -513,18 +572,23 @@ export async function getCombinedCashBook(
   const fromAD = fromBS ? toAD(fromBS) : fy.startAD
   const toADate = toBS ? toAD(toBS) : fy.endAD
 
-  // Identify cash & bank accounts
+  // Identify cash & bank accounts — each is its own column (cash first, then banks, by code).
   const cashBankAccounts = await prisma.account.findMany({
     where:  { schoolId, subType: { in: ["CASH", "BANK"] }, isActive: true },
-    select: { id: true, subType: true },
+    select: { id: true, code: true, name: true, subType: true },
   })
-  const cashIds = cashBankAccounts.filter(a => a.subType === "CASH").map(a => a.id)
-  const bankIds = cashBankAccounts.filter(a => a.subType === "BANK").map(a => a.id)
-  const allIds = [...cashIds, ...bankIds]
+  const byCode = (a: { code: string }, b: { code: string }) => a.code.localeCompare(b.code)
+  const ordered = [
+    ...cashBankAccounts.filter(a => a.subType === "CASH").sort(byCode),
+    ...cashBankAccounts.filter(a => a.subType === "BANK").sort(byCode),
+  ]
+  const allIds = ordered.map(a => a.id)
+  const cashIdSet = new Set(ordered.filter(a => a.subType === "CASH").map(a => a.id))
 
   if (allIds.length === 0) {
     return {
       fromBS: fromBS ?? fy.startBS, toBS: toBS ?? fy.endBS,
+      accounts: [],
       openingCash: "0.00", openingBank: "0.00",
       totalCashReceipts: "0.00", totalCashPayments: "0.00",
       totalBankReceipts: "0.00", totalBankPayments: "0.00",
@@ -553,88 +617,103 @@ export async function getCombinedCashBook(
       },
       include: {
         voucher: { select: { id: true, number: true, type: true, dateAD: true, dateBS: true, narration: true, createdAt: true } },
-        account: { select: { id: true, subType: true } },
       },
       orderBy: [{ voucher: { dateAD: "asc" } }, { voucher: { createdAt: "asc" } }, { lineNo: "asc" }],
     }),
   ])
 
-  // Opening balances (combined for cash & bank separately)
-  let openingCash = ZERO
-  let openingBank = ZERO
+  // Opening balance per account (seeded opening + pre-period activity)
+  const openingByAcct = new Map<string, Prisma.Decimal>(allIds.map(id => [id, ZERO]))
   for (const o of openings) {
-    const isCash = cashIds.includes(o.accountId)
-    const delta = o.debit.minus(o.credit)
-    if (isCash) openingCash = openingCash.add(delta); else openingBank = openingBank.add(delta)
+    openingByAcct.set(o.accountId, (openingByAcct.get(o.accountId) ?? ZERO).add(o.debit.minus(o.credit)))
   }
-  // Add prior activity to opening
   for (const p of priorActivity) {
-    const isCash = cashIds.includes(p.accountId)
-    const delta = (p._sum.debit ?? ZERO).minus(p._sum.credit ?? ZERO)
-    if (isCash) openingCash = openingCash.add(delta); else openingBank = openingBank.add(delta)
+    openingByAcct.set(p.accountId, (openingByAcct.get(p.accountId) ?? ZERO).add((p._sum.debit ?? ZERO).minus(p._sum.credit ?? ZERO)))
   }
 
-  // Group by voucher to produce one row per voucher
+  // Group lines by voucher, then by account → per-account dr/cr for each voucher
   const byVoucher = new Map<string, {
     voucher: typeof periodLines[number]["voucher"]
-    cashDr: Prisma.Decimal; cashCr: Prisma.Decimal
-    bankDr: Prisma.Decimal; bankCr: Prisma.Decimal
+    cells:   Map<string, { dr: Prisma.Decimal; cr: Prisma.Decimal }>
   }>()
   for (const l of periodLines) {
-    const isCash = l.account.subType === "CASH"
-    const cur = byVoucher.get(l.voucherId) ?? {
-      voucher: l.voucher, cashDr: ZERO, cashCr: ZERO, bankDr: ZERO, bankCr: ZERO,
-    }
-    if (isCash) { cur.cashDr = cur.cashDr.add(l.debit); cur.cashCr = cur.cashCr.add(l.credit) }
-    else        { cur.bankDr = cur.bankDr.add(l.debit); cur.bankCr = cur.bankCr.add(l.credit) }
+    const cur = byVoucher.get(l.voucherId) ?? { voucher: l.voucher, cells: new Map() }
+    const cell = cur.cells.get(l.accountId) ?? { dr: ZERO, cr: ZERO }
+    cell.dr = cell.dr.add(l.debit)
+    cell.cr = cell.cr.add(l.credit)
+    cur.cells.set(l.accountId, cell)
     byVoucher.set(l.voucherId, cur)
   }
 
-  // Sort by voucher date
   const sorted = [...byVoucher.values()].sort((a, b) => {
     const t = a.voucher.dateAD.getTime() - b.voucher.dateAD.getTime()
     if (t !== 0) return t
     return a.voucher.createdAt.getTime() - b.voucher.createdAt.getTime()
   })
 
-  let runningCash = openingCash
-  let runningBank = openingBank
-  let cashReceipts = ZERO, cashPayments = ZERO
-  let bankReceipts = ZERO, bankPayments = ZERO
+  // Running balance + receipts/payments per account, walking vouchers in order
+  const running  = new Map<string, Prisma.Decimal>(allIds.map(id => [id, openingByAcct.get(id) ?? ZERO]))
+  const receipts = new Map<string, Prisma.Decimal>(allIds.map(id => [id, ZERO]))
+  const payments = new Map<string, Prisma.Decimal>(allIds.map(id => [id, ZERO]))
 
   const rows: CombinedBookRow[] = sorted.map(v => {
-    runningCash = runningCash.add(v.cashDr).minus(v.cashCr)
-    runningBank = runningBank.add(v.bankDr).minus(v.bankCr)
-    cashReceipts = cashReceipts.add(v.cashDr)
-    cashPayments = cashPayments.add(v.cashCr)
-    bankReceipts = bankReceipts.add(v.bankDr)
-    bankPayments = bankPayments.add(v.bankCr)
+    for (const [accId, cell] of v.cells) {
+      running.set(accId, (running.get(accId) ?? ZERO).add(cell.dr).minus(cell.cr))
+      receipts.set(accId, (receipts.get(accId) ?? ZERO).add(cell.dr))
+      payments.set(accId, (payments.get(accId) ?? ZERO).add(cell.cr))
+    }
+    const perAccount: Record<string, CombinedBookCell> = {}
+    for (const id of allIds) {
+      const cell = v.cells.get(id)
+      perAccount[id] = {
+        dr:      (cell?.dr ?? ZERO).toFixed(2),
+        cr:      (cell?.cr ?? ZERO).toFixed(2),
+        running: (running.get(id) ?? ZERO).toFixed(2),
+      }
+    }
     return {
       dateBS:        v.voucher.dateBS,
       voucherId:     v.voucher.id,
       voucherNumber: v.voucher.number,
       voucherType:   v.voucher.type,
       narration:     v.voucher.narration,
-      cashDr:        v.cashDr.toFixed(2),
-      cashCr:        v.cashCr.toFixed(2),
-      bankDr:        v.bankDr.toFixed(2),
-      bankCr:        v.bankCr.toFixed(2),
-      cashRunning:   runningCash.toFixed(2),
-      bankRunning:   runningBank.toFixed(2),
+      perAccount,
+    }
+  })
+
+  // Per-account meta + summed CASH/BANK totals (for KPI cards)
+  let openingCash = ZERO, openingBank = ZERO, closingCash = ZERO, closingBank = ZERO
+  let totalCashReceipts = ZERO, totalCashPayments = ZERO, totalBankReceipts = ZERO, totalBankPayments = ZERO
+  const accounts: CombinedBookAccount[] = ordered.map(a => {
+    const op = openingByAcct.get(a.id) ?? ZERO
+    const cl = running.get(a.id) ?? ZERO
+    const rc = receipts.get(a.id) ?? ZERO
+    const pm = payments.get(a.id) ?? ZERO
+    if (cashIdSet.has(a.id)) {
+      openingCash = openingCash.add(op); closingCash = closingCash.add(cl)
+      totalCashReceipts = totalCashReceipts.add(rc); totalCashPayments = totalCashPayments.add(pm)
+    } else {
+      openingBank = openingBank.add(op); closingBank = closingBank.add(cl)
+      totalBankReceipts = totalBankReceipts.add(rc); totalBankPayments = totalBankPayments.add(pm)
+    }
+    return {
+      id: a.id, code: a.code, name: a.name, subType: a.subType as "CASH" | "BANK",
+      opening: op.toFixed(2), closing: cl.toFixed(2), receipts: rc.toFixed(2), payments: pm.toFixed(2),
     }
   })
 
   return {
     fromBS:           fromBS ?? fy.startBS,
     toBS:             toBS ?? fy.endBS,
+    accounts,
     openingCash:      openingCash.toFixed(2),
     openingBank:      openingBank.toFixed(2),
-    totalCashReceipts: cashReceipts.toFixed(2),
-    totalCashPayments: cashPayments.toFixed(2),
-    totalBankReceipts: bankReceipts.toFixed(2),
-    totalBankPayments: bankPayments.toFixed(2),
-    closingCash:      runningCash.toFixed(2),
-    closingBank:      runningBank.toFixed(2),
+    totalCashReceipts: totalCashReceipts.toFixed(2),
+    totalCashPayments: totalCashPayments.toFixed(2),
+    totalBankReceipts: totalBankReceipts.toFixed(2),
+    totalBankPayments: totalBankPayments.toFixed(2),
+    closingCash:      closingCash.toFixed(2),
+    closingBank:      closingBank.toFixed(2),
     rows,
   }
 }

@@ -29,7 +29,6 @@ export interface LedgerRowView {
   fiscalYearId:      string
   fiscalYearName:    string
   isCurrentFY:       boolean
-  billVoucherNumber: string | null
   isOverdue:         boolean
 }
 
@@ -49,9 +48,10 @@ export interface StudentLedger {
   className:       string | null
   admissionNo:     string
 
-  totalBilled:     string  // sum of finalAmount across non-cancelled rows
+  totalBilled:     string  // sum of finalAmount across issued rows (BILLED/PARTIAL/PAID)
   totalPaid:       string  // sum of paidAmount
-  balance:         string
+  totalPlanned:    string  // sum of finalAmount across PLANNED rows (scheduled, not yet issued)
+  balance:         string  // totalBilled − totalPaid (excludes PLANNED)
 
   /** Brought-forward summary: unpaid balance from prior fiscal years only. */
   carryForward: {
@@ -101,13 +101,20 @@ export async function getStudentLedger(studentId: string): Promise<StudentLedger
   const now = new Date()
   let totalBilled = new D(0)
   let totalPaid = new D(0)
+  let totalPlanned = new D(0)
   let cfBalance = new D(0)
   let cfCount = 0
   let cfOldest: string | null = null
 
   const rowViews: LedgerRowView[] = rows.map(r => {
-    totalBilled = totalBilled.plus(r.finalAmount)
-    totalPaid = totalPaid.plus(r.paidAmount)
+    // Billed/outstanding count issued rows only (BILLED/PARTIAL/PAID). PLANNED is
+    // scheduled-but-not-yet-issued, so it's tracked separately and never inflates dues.
+    if (r.status === "PLANNED") {
+      totalPlanned = totalPlanned.plus(r.finalAmount)
+    } else {
+      totalBilled = totalBilled.plus(r.finalAmount)
+      totalPaid = totalPaid.plus(r.paidAmount)
+    }
     const balance = r.finalAmount.minus(r.paidAmount)
     const isCurrentFY = r.fiscalYear.isCurrent
     if (!isCurrentFY && balance.greaterThan(0) && r.status !== "PLANNED") {
@@ -132,7 +139,6 @@ export async function getStudentLedger(studentId: string): Promise<StudentLedger
       fiscalYearId:      r.fiscalYearId,
       fiscalYearName:    r.fiscalYear.name,
       isCurrentFY,
-      billVoucherNumber: r.billVoucherNumber,
       isOverdue:         (r.status === "BILLED" || r.status === "PARTIAL") && r.dueDateAD < now,
     }
   })
@@ -176,6 +182,7 @@ export async function getStudentLedger(studentId: string): Promise<StudentLedger
     admissionNo:     student.admissionNo,
     totalBilled:     totalBilled.toFixed(2),
     totalPaid:       totalPaid.toFixed(2),
+    totalPlanned:    totalPlanned.toFixed(2),
     balance:         totalBilled.minus(totalPaid).toFixed(2),
     carryForward: {
       balance:     cfBalance.toFixed(2),
@@ -265,7 +272,9 @@ export async function getBillingDashboard() {
       total:       r.finalAmount.toFixed(2),
       paid:        r.paidAmount.toFixed(2),
       status:      r.status,
-      voucher:     r.billVoucherNumber,
     })),
   }
 }
+
+// Bill Book removed 2026-05-26 — the per-class outstanding rollup was folded
+// into the Classes landing page (/finance/classes).

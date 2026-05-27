@@ -192,18 +192,8 @@ export default async function CombinedCashBookPage({
         })}
       </div>
 
-      {/* ── Main table (client-interactive) ────────────────────── */}
-      <CashBookClient
-        rows={book.rows}
-        openingCash={book.openingCash}
-        openingBank={book.openingBank}
-        closingCash={book.closingCash}
-        closingBank={book.closingBank}
-        totalCashReceipts={book.totalCashReceipts}
-        totalCashPayments={book.totalCashPayments}
-        totalBankReceipts={book.totalBankReceipts}
-        totalBankPayments={book.totalBankPayments}
-      />
+      {/* ── Main table (client-interactive, per-account columns) ── */}
+      <CashBookClient rows={book.rows} accounts={book.accounts} />
     </div>
   )
 }

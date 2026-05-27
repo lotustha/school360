@@ -192,7 +192,8 @@ export async function previewYearEndClose(fiscalYearId: string): Promise<YearEnd
   // not a hard gate — the AR balance carries forward as a balance-sheet
   // account regardless, but the school should know it's there before closing.
   const arAgg = await prisma.studentFee.aggregate({
-    where: { schoolId, fiscalYearId: fy.id, status: { in: ["BILLED", "PARTIAL", "PLANNED"] } },
+    // AR = issued-but-unpaid only (BILLED/PARTIAL). PLANNED isn't a receivable.
+    where: { schoolId, fiscalYearId: fy.id, status: { in: ["BILLED", "PARTIAL"] } },
     _sum:  { finalAmount: true, paidAmount: true },
     _count: true,
   })

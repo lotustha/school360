@@ -687,7 +687,6 @@ function SheetMeta({ row }: { row: StudentFeeRow }) {
         </span>
       } />
       <Row label="Paid"     value={<span className="font-mono">Rs. {row.paidAmount} of Rs. {row.finalAmount}</span>} />
-      {row.billVoucherNumber && <Row label="Voucher" value={<span className="font-mono">{row.billVoucherNumber}</span>} />}
       <span className="text-slate-400 pointer-events-none"><Pencil className="w-3 h-3 inline mr-1 mb-0.5" />Edit below — PAID amount is the floor for &quot;final&quot;.</span>
     </div>
   )

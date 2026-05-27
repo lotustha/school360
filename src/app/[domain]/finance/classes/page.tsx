@@ -1,6 +1,6 @@
 import Link from "next/link"
 import { Metadata } from "next"
-import { GraduationCap, AlertCircle, Users as UsersIcon, Wallet, TrendingUp, FileText } from "lucide-react"
+import { GraduationCap, AlertCircle, Users as UsersIcon, Wallet, TrendingUp, FileText, CalendarClock } from "lucide-react"
 import { prisma } from "@/lib/prisma"
 import { requirePermission } from "@/lib/permissions"
 import { cn } from "@/lib/utils"
@@ -9,15 +9,18 @@ import { ClassesClient } from "./classes-client"
 export const metadata: Metadata = { title: "Classes · Fees" }
 
 export interface ClassCard {
-  id:           string
-  name:         string
-  facultyName:  string | null
-  classTeacher: string | null
-  studentCount: number
-  billed:       number
-  paid:         number
-  outstanding:  number
-  pct:          number
+  id:                 string
+  name:               string
+  facultyName:        string | null
+  classTeacher:       string | null
+  studentCount:       number
+  billed:             number   // issued only (BILLED + PARTIAL + PAID)
+  paid:               number
+  outstanding:        number   // billed − paid
+  planned:            number   // PLANNED rows — scheduled, not yet issued
+  overdueCount:       number   // BILLED/PARTIAL rows past due date
+  overdueOutstanding: number
+  pct:                number
 }
 
 export default async function ClassesLandingPage() {
@@ -46,44 +49,57 @@ export default async function ClassesLandingPage() {
     }),
   ])
 
-  // Per-student aggregates (FY-scoped) → join to classes
-  const aggregates = currentFY ? await prisma.studentFee.groupBy({
-    by: ["studentId"],
-    where: { schoolId, fiscalYearId: currentFY.id },
-    _sum: { finalAmount: true, paidAmount: true },
+  // Per-class fee aggregates (current FY). Cash-basis rules:
+  //   billed/paid/outstanding ← issued rows only (BILLED, PARTIAL, PAID)
+  //   planned                 ← PLANNED rows (scheduled, not yet issued) — its own bucket
+  //   overdue                 ← BILLED/PARTIAL rows past their due date
+  // CANCELLED rows are excluded entirely.
+  const now = new Date()
+  const feeRows = currentFY ? await prisma.studentFee.findMany({
+    where: { schoolId, fiscalYearId: currentFY.id, status: { not: "CANCELLED" } },
+    select: {
+      finalAmount: true, paidAmount: true, status: true, dueDateAD: true,
+      student: { select: { classId: true } },
+    },
   }) : []
 
-  const studentIds = aggregates.map(a => a.studentId)
-  const studentClassMap = studentIds.length > 0
-    ? new Map((await prisma.student.findMany({
-        where: { id: { in: studentIds } },
-        select: { id: true, classId: true },
-      })).map(s => [s.id, s.classId]))
-    : new Map<string, string | null>()
-
-  const classTotals = new Map<string, { billed: number; paid: number }>()
-  for (const a of aggregates) {
-    const cid = studentClassMap.get(a.studentId)
+  type Totals = { billed: number; paid: number; planned: number; overdueCount: number; overdueOutstanding: number }
+  const classTotals = new Map<string, Totals>()
+  for (const r of feeRows) {
+    const cid = r.student.classId
     if (!cid) continue
-    const t = classTotals.get(cid) ?? { billed: 0, paid: 0 }
-    t.billed += Number(a._sum.finalAmount ?? 0)
-    t.paid   += Number(a._sum.paidAmount ?? 0)
+    const t = classTotals.get(cid) ?? { billed: 0, paid: 0, planned: 0, overdueCount: 0, overdueOutstanding: 0 }
+    const final = Number(r.finalAmount)
+    const paid  = Number(r.paidAmount)
+    if (r.status === "PLANNED") {
+      t.planned += final
+    } else {
+      t.billed += final
+      t.paid   += paid
+      if ((r.status === "BILLED" || r.status === "PARTIAL") && r.dueDateAD < now) {
+        t.overdueCount++
+        t.overdueOutstanding += Math.max(0, final - paid)
+      }
+    }
     classTotals.set(cid, t)
   }
 
   const cards: ClassCard[] = classes.map(c => {
-    const t = classTotals.get(c.id) ?? { billed: 0, paid: 0 }
+    const t = classTotals.get(c.id) ?? { billed: 0, paid: 0, planned: 0, overdueCount: 0, overdueOutstanding: 0 }
     const outstanding = Math.max(0, t.billed - t.paid)
     const pct = t.billed > 0 ? Math.round((t.paid / t.billed) * 100) : 0
     return {
-      id:           c.id,
-      name:         c.name,
-      facultyName:  c.faculty?.name ?? null,
-      classTeacher: c.classTeacher?.fullName ?? null,
-      studentCount: c._count.students,
-      billed:       t.billed,
-      paid:         t.paid,
+      id:                 c.id,
+      name:               c.name,
+      facultyName:        c.faculty?.name ?? null,
+      classTeacher:       c.classTeacher?.fullName ?? null,
+      studentCount:       c._count.students,
+      billed:             t.billed,
+      paid:               t.paid,
       outstanding,
+      planned:            t.planned,
+      overdueCount:       t.overdueCount,
+      overdueOutstanding: t.overdueOutstanding,
       pct,
     }
   })
@@ -92,6 +108,8 @@ export default async function ClassesLandingPage() {
   const totalStudents    = cards.reduce((s, c) => s + c.studentCount, 0)
   const totalBilled      = cards.reduce((s, c) => s + c.billed, 0)
   const totalPaid        = cards.reduce((s, c) => s + c.paid, 0)
+  const totalPlanned     = cards.reduce((s, c) => s + c.planned, 0)
+  const totalOverdue     = cards.reduce((s, c) => s + c.overdueOutstanding, 0)
   const totalOutstanding = Math.max(0, totalBilled - totalPaid)
   const overallPct       = totalBilled > 0 ? Math.round((totalPaid / totalBilled) * 100) : 0
 
@@ -120,11 +138,12 @@ export default async function ClassesLandingPage() {
       )}
 
       {/* KPI strip */}
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         <KPI label="Students"    value={`${totalStudents}`}                 sub="Across all classes" tone="slate"   icon={UsersIcon} />
-        <KPI label="Billed"      value={`Rs. ${formatMoney(totalBilled)}`}  sub="This fiscal year"   tone="primary" icon={FileText} />
+        <KPI label="Billed"      value={`Rs. ${formatMoney(totalBilled)}`}  sub="Issued this FY"     tone="primary" icon={FileText} />
         <KPI label="Collected"   value={`Rs. ${formatMoney(totalPaid)}`}    sub={`${overallPct}% of billed`} tone="emerald" icon={TrendingUp} />
-        <KPI label="Outstanding" value={`Rs. ${formatMoney(totalOutstanding)}`} sub={totalOutstanding > 0 ? "Awaiting collection" : "All caught up"} tone={totalOutstanding > 0 ? "rose" : "emerald"} icon={Wallet} />
+        <KPI label="Outstanding" value={`Rs. ${formatMoney(totalOutstanding)}`} sub={totalOverdue > 0 ? `Rs. ${formatMoney(totalOverdue)} overdue` : totalOutstanding > 0 ? "Awaiting collection" : "All caught up"} tone={totalOutstanding > 0 ? "rose" : "emerald"} icon={Wallet} />
+        <KPI label="Planned"     value={`Rs. ${formatMoney(totalPlanned)}`} sub="Scheduled, not billed" tone="indigo" icon={CalendarClock} />
       </div>
 
       {cards.length === 0 ? (
@@ -151,7 +170,7 @@ function KPI({
   label, value, sub, tone, icon: Icon,
 }: {
   label: string; value: string; sub: string
-  tone: "slate" | "primary" | "emerald" | "rose"
+  tone: "slate" | "primary" | "emerald" | "rose" | "indigo"
   icon: React.ElementType
 }) {
   const palette = {
@@ -159,6 +178,7 @@ function KPI({
     primary: { ring: "ring-primary/10",  icon: "text-primary bg-primary/8",      value: "text-primary" },
     emerald: { ring: "ring-emerald-100", icon: "text-emerald-600 bg-emerald-50", value: "text-emerald-700" },
     rose:    { ring: "ring-rose-100",    icon: "text-rose-600 bg-rose-50",       value: "text-rose-700" },
+    indigo:  { ring: "ring-indigo-100",  icon: "text-indigo-600 bg-indigo-50",   value: "text-indigo-700" },
   }[tone]
   return (
     <div className={cn("bg-white/70 backdrop-blur-xl rounded-xl border border-white/40 shadow-sm p-4 ring-1", palette.ring)}>

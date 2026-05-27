@@ -130,6 +130,7 @@ export default async function StudentSchedulePage({
             <KPI label="Billed"      value={`Rs. ${ledger.totalBilled}`} tone="slate" />
             <KPI label="Paid"        value={`Rs. ${ledger.totalPaid}`}   tone="emerald" />
             <KPI label="Outstanding" value={`Rs. ${ledger.balance}`}     tone={parseFloat(ledger.balance) > 0 ? "rose" : "emerald"} />
+            <KPI label="Planned"     value={`Rs. ${ledger.totalPlanned}`} tone="indigo" />
           </div>
         )}
       </div>
@@ -232,11 +233,12 @@ export default async function StudentSchedulePage({
   )
 }
 
-function KPI({ label, value, tone }: { label: string; value: string; tone: "slate" | "emerald" | "rose" }) {
+function KPI({ label, value, tone }: { label: string; value: string; tone: "slate" | "emerald" | "rose" | "indigo" }) {
   const colors = {
     slate:   "text-slate-700",
     emerald: "text-emerald-700",
     rose:    "text-rose-700",
+    indigo:  "text-indigo-700",
   }[tone]
   return (
     <div>

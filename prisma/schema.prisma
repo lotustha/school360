@@ -1380,7 +1380,6 @@ model Voucher {
   reversedBy Voucher?       @relation("VoucherReversal")
   feePayment FeePayment?
   payrollRun PayrollRun?
-  billedFees StudentFee[] @relation("StudentFeeBillVoucher")
 
   @@unique([schoolId, number])
   @@index([schoolId, fiscalYearId, dateAD])
@@ -1558,6 +1557,10 @@ model PayrollRun {
   totalGross    Decimal  @db.Decimal(14, 2)
   totalTds      Decimal  @db.Decimal(14, 2)
   totalSsf      Decimal  @db.Decimal(14, 2)
+  totalPf       Decimal  @db.Decimal(14, 2) @default(0) // employee Provident Fund
+  totalPfEmployer  Decimal @db.Decimal(14, 2) @default(0) // employer PF match
+  totalCit      Decimal  @db.Decimal(14, 2) @default(0) // employee Citizen Investment Trust
+  totalCitEmployer Decimal @db.Decimal(14, 2) @default(0) // employer CIT contribution
   totalNet      Decimal  @db.Decimal(14, 2)
   voucherId     String?  @unique // auto-posted PV
   bankAccountId String?  // when method != CASH
@@ -1586,6 +1589,10 @@ model PayrollRunLine {
   gross      Decimal  @db.Decimal(14, 2)
   tds        Decimal  @db.Decimal(14, 2) @default(0)
   ssf        Decimal  @db.Decimal(14, 2) @default(0)
+  pf         Decimal  @db.Decimal(14, 2) @default(0) // employee Provident Fund
+  pfEmployer Decimal  @db.Decimal(14, 2) @default(0) // employer PF match
+  cit        Decimal  @db.Decimal(14, 2) @default(0) // employee Citizen Investment Trust
+  citEmployer Decimal @db.Decimal(14, 2) @default(0) // employer CIT contribution
   net        Decimal  @db.Decimal(14, 2)
   remarks    String?
 
@@ -1737,11 +1744,6 @@ model StudentFee {
   notes             String?
   /// Optional link back to the plan that generated this row.
   sourcePlanId      String?
-  /// Voucher number assigned when the row was BILLED (BL-FYNAME-NNNN).
-  billVoucherNumber String?
-  /// FK to the BL Voucher posted at billing time (DR AR / CR Income).
-  /// Null on rows billed before accrual mode was enabled.
-  billVoucherId     String?
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -1753,7 +1755,6 @@ model StudentFee {
   fiscalYear  FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
   feeHead     FeeHead    @relation(fields: [feeHeadId], references: [id], onDelete: Restrict)
   sourcePlan  FeePlan?   @relation(fields: [sourcePlanId], references: [id], onDelete: SetNull)
-  billVoucher Voucher?   @relation("StudentFeeBillVoucher", fields: [billVoucherId], references: [id], onDelete: SetNull)
   allocations FeePaymentAllocation[]
 
   /// Idempotency: at most one row per (student, FY, head, period). Re-applying a

@@ -31,11 +31,15 @@ interface Props {
 }
 
 interface LineState {
-  include: boolean
-  gross:   string
-  tds:     string
-  ssf:     string
-  remarks: string
+  include:     boolean
+  gross:       string
+  tds:         string
+  ssf:         string
+  pf:          string
+  pfEmployer:  string
+  cit:         string
+  citEmployer: string
+  remarks:     string
 }
 
 export function PayrollRunForm({ fiscalYearName, roster, banks }: Props) {
@@ -56,11 +60,15 @@ export function PayrollRunForm({ fiscalYearName, roster, banks }: Props) {
       const gross = parseFloat(e.baseSalary) || 0
       const tds   = ((gross * (parseFloat(e.tdsPercent) || 0)) / 100).toFixed(2)
       seed[e.employeeId] = {
-        include: gross > 0,
-        gross:   e.baseSalary,
+        include:     gross > 0,
+        gross:       e.baseSalary,
         tds,
-        ssf:     "0",
-        remarks: "",
+        ssf:         "0",
+        pf:          "0",
+        pfEmployer:  "0",
+        cit:         "0",
+        citEmployer: "0",
+        remarks:     "",
       }
     }
     return seed
@@ -71,17 +79,22 @@ export function PayrollRunForm({ fiscalYearName, roster, banks }: Props) {
   }
 
   const totals = useMemo(() => {
-    let gross = 0, tds = 0, ssf = 0
+    let gross = 0, tds = 0, ssf = 0, pf = 0, pfEmployer = 0, cit = 0, citEmployer = 0
     let count = 0
     for (const e of roster) {
       const l = lines[e.employeeId]
       if (!l?.include) continue
-      gross += parseFloat(l.gross || "0") || 0
-      tds   += parseFloat(l.tds   || "0") || 0
-      ssf   += parseFloat(l.ssf   || "0") || 0
+      gross       += parseFloat(l.gross       || "0") || 0
+      tds         += parseFloat(l.tds         || "0") || 0
+      ssf         += parseFloat(l.ssf         || "0") || 0
+      pf          += parseFloat(l.pf          || "0") || 0
+      pfEmployer  += parseFloat(l.pfEmployer  || "0") || 0
+      cit         += parseFloat(l.cit         || "0") || 0
+      citEmployer += parseFloat(l.citEmployer || "0") || 0
       count++
     }
-    return { gross, tds, ssf, net: gross - tds - ssf, count }
+    // Net = gross − employee deductions only; employer PF/CIT are extra cost, not a deduction.
+    return { gross, tds, ssf, pf, pfEmployer, cit, citEmployer, net: gross - tds - ssf - pf - cit, count }
   }, [lines, roster])
 
   const canPost =
@@ -98,11 +111,15 @@ export function PayrollRunForm({ fiscalYearName, roster, banks }: Props) {
       .map(e => {
         const l = lines[e.employeeId]
         return {
-          employeeId: e.employeeId,
-          gross:      String(parseFloat(l.gross) || 0),
-          tds:        String(parseFloat(l.tds)   || 0),
-          ssf:        String(parseFloat(l.ssf)   || 0),
-          remarks:    l.remarks.trim() || null,
+          employeeId:  e.employeeId,
+          gross:       String(parseFloat(l.gross)       || 0),
+          tds:         String(parseFloat(l.tds)         || 0),
+          ssf:         String(parseFloat(l.ssf)         || 0),
+          pf:          String(parseFloat(l.pf)          || 0),
+          pfEmployer:  String(parseFloat(l.pfEmployer)  || 0),
+          cit:         String(parseFloat(l.cit)         || 0),
+          citEmployer: String(parseFloat(l.citEmployer) || 0),
+          remarks:     l.remarks.trim() || null,
         }
       })
 
@@ -137,7 +154,7 @@ export function PayrollRunForm({ fiscalYearName, roster, banks }: Props) {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Run Payroll</h1>
-          <p className="text-sm text-muted-foreground">Posts one Payment Voucher with Dr Salary · Cr TDS · Cr SSF · Cr Cash/Bank.</p>
+          <p className="text-sm text-muted-foreground">Posts one Payment Voucher: Dr Salary (+ Dr Employer PF/CIT) · Cr TDS/SSF/PF/CIT Payable · Cr Cash/Bank. "(Er)" columns are the employer match — extra cost, not deducted from net.</p>
         </div>
         <span className="text-xs text-muted-foreground font-mono">FY {fiscalYearName}</span>
       </div>
@@ -194,23 +211,28 @@ export function PayrollRunForm({ fiscalYearName, roster, banks }: Props) {
           <p className="text-sm font-semibold">Employees · {totals.count} included</p>
           <p className="text-xs text-muted-foreground">Defaults come from each staff member&apos;s payroll structure.</p>
         </div>
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[1100px]">
           <thead className="bg-slate-50/60 text-[10px] uppercase tracking-widest text-slate-500 font-black">
             <tr>
               <th className="px-3 py-2 text-center w-12">Pay</th>
               <th className="px-3 py-2 text-left">Employee</th>
               <th className="px-3 py-2 text-left w-24">PAN</th>
-              <th className="px-3 py-2 text-right w-28">Gross</th>
-              <th className="px-3 py-2 text-right w-28">TDS</th>
-              <th className="px-3 py-2 text-right w-28">SSF</th>
-              <th className="px-3 py-2 text-right w-28">Net</th>
-              <th className="px-3 py-2 text-left w-40">Remarks</th>
+              <th className="px-3 py-2 text-right w-24">Gross</th>
+              <th className="px-3 py-2 text-right w-20">TDS</th>
+              <th className="px-3 py-2 text-right w-20">SSF</th>
+              <th className="px-3 py-2 text-right w-20">PF</th>
+              <th className="px-3 py-2 text-right w-20" title="Employer PF match">PF (Er)</th>
+              <th className="px-3 py-2 text-right w-20">CIT</th>
+              <th className="px-3 py-2 text-right w-20" title="Employer CIT contribution">CIT (Er)</th>
+              <th className="px-3 py-2 text-right w-24">Net</th>
+              <th className="px-3 py-2 text-left w-36">Remarks</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100/60">
             {roster.map(e => {
               const l = lines[e.employeeId]
-              const net = ((parseFloat(l.gross) || 0) - (parseFloat(l.tds) || 0) - (parseFloat(l.ssf) || 0)).toFixed(2)
+              const net = ((parseFloat(l.gross) || 0) - (parseFloat(l.tds) || 0) - (parseFloat(l.ssf) || 0) - (parseFloat(l.pf) || 0) - (parseFloat(l.cit) || 0)).toFixed(2)
               return (
                 <tr key={e.employeeId} className={cn("hover:bg-slate-50/60 transition-colors", !l.include && "opacity-50")}>
                   <td className="px-3 py-1.5 text-center">
@@ -248,6 +270,42 @@ export function PayrollRunForm({ fiscalYearName, roster, banks }: Props) {
                       className="w-full text-right font-mono text-sm px-2 py-1.5 bg-transparent border border-transparent hover:bg-white focus:bg-white focus:border-primary focus:ring-2 focus:ring-primary/15 rounded outline-none disabled:bg-slate-50 disabled:text-slate-400"
                     />
                   </td>
+                  <td className="px-1 py-1">
+                    <input
+                      type="text" inputMode="decimal"
+                      value={l.pf}
+                      onChange={ev => updateLine(e.employeeId, { pf: ev.target.value })}
+                      disabled={!l.include}
+                      className="w-full text-right font-mono text-sm px-2 py-1.5 bg-transparent border border-transparent hover:bg-white focus:bg-white focus:border-primary focus:ring-2 focus:ring-primary/15 rounded outline-none disabled:bg-slate-50 disabled:text-slate-400"
+                    />
+                  </td>
+                  <td className="px-1 py-1">
+                    <input
+                      type="text" inputMode="decimal"
+                      value={l.pfEmployer}
+                      onChange={ev => updateLine(e.employeeId, { pfEmployer: ev.target.value })}
+                      disabled={!l.include}
+                      className="w-full text-right font-mono text-sm px-2 py-1.5 bg-transparent border border-transparent hover:bg-white focus:bg-white focus:border-primary focus:ring-2 focus:ring-primary/15 rounded outline-none disabled:bg-slate-50 disabled:text-slate-400"
+                    />
+                  </td>
+                  <td className="px-1 py-1">
+                    <input
+                      type="text" inputMode="decimal"
+                      value={l.cit}
+                      onChange={ev => updateLine(e.employeeId, { cit: ev.target.value })}
+                      disabled={!l.include}
+                      className="w-full text-right font-mono text-sm px-2 py-1.5 bg-transparent border border-transparent hover:bg-white focus:bg-white focus:border-primary focus:ring-2 focus:ring-primary/15 rounded outline-none disabled:bg-slate-50 disabled:text-slate-400"
+                    />
+                  </td>
+                  <td className="px-1 py-1">
+                    <input
+                      type="text" inputMode="decimal"
+                      value={l.citEmployer}
+                      onChange={ev => updateLine(e.employeeId, { citEmployer: ev.target.value })}
+                      disabled={!l.include}
+                      className="w-full text-right font-mono text-sm px-2 py-1.5 bg-transparent border border-transparent hover:bg-white focus:bg-white focus:border-primary focus:ring-2 focus:ring-primary/15 rounded outline-none disabled:bg-slate-50 disabled:text-slate-400"
+                    />
+                  </td>
                   <td className="px-3 py-1.5 text-right font-mono tabular-nums font-bold text-emerald-700">{l.include ? net : ""}</td>
                   <td className="px-1 py-1">
                     <input
@@ -269,11 +327,16 @@ export function PayrollRunForm({ fiscalYearName, roster, banks }: Props) {
               <td className="px-3 py-2.5 text-right font-mono tabular-nums">{totals.gross.toFixed(2)}</td>
               <td className="px-3 py-2.5 text-right font-mono tabular-nums text-rose-700">{totals.tds.toFixed(2)}</td>
               <td className="px-3 py-2.5 text-right font-mono tabular-nums text-violet-700">{totals.ssf.toFixed(2)}</td>
+              <td className="px-3 py-2.5 text-right font-mono tabular-nums text-violet-700">{totals.pf.toFixed(2)}</td>
+              <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-500">{totals.pfEmployer.toFixed(2)}</td>
+              <td className="px-3 py-2.5 text-right font-mono tabular-nums text-violet-700">{totals.cit.toFixed(2)}</td>
+              <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-500">{totals.citEmployer.toFixed(2)}</td>
               <td className="px-3 py-2.5 text-right font-mono tabular-nums text-emerald-700">{totals.net.toFixed(2)}</td>
               <td></td>
             </tr>
           </tfoot>
         </table>
+        </div>
       </div>
 
       {/* Sticky action bar */}
