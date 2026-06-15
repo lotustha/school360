@@ -1,52 +1,46 @@
-import { prisma } from "@/lib/prisma"
+import type { Session } from "next-auth"
+import { getSchoolSession, hasPermission, requirePermission } from "@/lib/permissions"
 
-export class PermissionError extends Error {
-  constructor(code: string) {
-    super(`Missing permission: ${code}`)
-    this.name = "PermissionError"
+// Thin permission-gate helpers layered on top of src/lib/permissions.ts (the
+// canonical RBAC implementation: requirePermission(code) / hasPermission).
+//
+// NOTE: this file previously held a DUPLICATE permission checker with a
+// (schoolId, userId, code) signature. That implementation was removed in
+// Phase 0.6 — always use requirePermission(code) from "@/lib/permissions"
+// or the helpers below.
+
+/**
+ * requirePermission + explicit tenant check. Use in legacy-style server
+ * actions that accept a client-supplied `schoolId` argument: verifies the
+ * caller's session school matches the supplied id before any query runs.
+ * Returns the session so callers can use session.user.schoolId / .id.
+ */
+export async function requireSchoolPermission(
+  code: string,
+  schoolId?: string,
+): Promise<Session> {
+  const session = await requirePermission(code)
+  if (schoolId !== undefined && schoolId !== session.user.schoolId) {
+    throw new Error("FORBIDDEN")
   }
+  return session
 }
 
-export async function requirePermission(
-  schoolId: string,
-  userId: string,
-  code: string
-): Promise<true> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: {
-      role: true,
-      userPermissions: { include: { permission: true } },
-      customRole: { include: { permissions: { include: { permission: true } } } },
-    },
-  })
-
-  if (!user) throw new PermissionError(code)
-  if (user.role === "SUPER_ADMIN" || user.role === "SCHOOL_ADMIN") return true
-
-  const override = user.userPermissions.find(up => up.permission.code === code)
-  if (override) {
-    if (!override.isGranted) throw new PermissionError(code)
-    return true
+/**
+ * Passes if the session holds ANY of the given permission codes (e.g. a
+ * read gate that accepts either `exam:view` or the stronger `exam:manage`).
+ * Optionally verifies a client-supplied schoolId against the session.
+ */
+export async function requireAnyPermission(
+  codes: string[],
+  schoolId?: string,
+): Promise<Session> {
+  const session = await getSchoolSession()
+  if (schoolId !== undefined && schoolId !== session.user.schoolId) {
+    throw new Error("FORBIDDEN")
   }
-
-  const hasViaRole = user.customRole?.permissions.some(
-    rp => rp.permission.code === code
-  )
-  if (hasViaRole) return true
-
-  throw new PermissionError(code)
-}
-
-export async function hasPermission(
-  schoolId: string,
-  userId: string,
-  code: string
-): Promise<boolean> {
-  try {
-    await requirePermission(schoolId, userId, code)
-    return true
-  } catch {
-    return false
+  for (const code of codes) {
+    if (await hasPermission(session, code)) return session
   }
+  throw new Error("FORBIDDEN")
 }

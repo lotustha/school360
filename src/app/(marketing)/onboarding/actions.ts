@@ -4,11 +4,19 @@ import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import NepaliDate from "nepali-date-converter";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { saveUpload, UploadError, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES } from "@/lib/storage";
 
 const OnboardingSchema = z.object({
   schoolName: z.string().min(3, "School name is too short"),
+  // P12 — institution type architecture (SCHOOL | COLLEGE | UNIVERSITY)
+  institutionType: z.preprocess(
+    (v) => (v === "" || v == null ? "SCHOOL" : v),
+    z.enum(["SCHOOL", "COLLEGE", "UNIVERSITY"])
+  ),
+  affiliatedTo: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.enum(["TU", "KU", "PU", "PUF", "FWU", "MU"]).optional()
+  ),
   panNumber: z.string().length(9, "PAN must be exactly 9 digits"),
   phone: z.string().min(7, "Invalid phone number"),
   address: z.string().min(5, "Address is required"),
@@ -27,6 +35,8 @@ const MODULE_PRICES: Record<string, number> = {
   EXAM_CAS: 1500,
   TRANSPORT_GPS: 500,
   MOBILE_APP: 833,
+  HIGHER_EDUCATION: 2500,
+  ONLINE_LEARNING: 1500,
 };
 
 export async function registerSchoolAction(formData: FormData) {
@@ -51,15 +61,16 @@ export async function registerSchoolAction(formData: FormData) {
 
   if (logoFile && logoFile.size > 0) {
     try {
-      const timestamp = Date.now();
-      const ext = logoFile.name.split(".").pop() || "png";
-      const filename = `${rawData.slug}-${timestamp}.${ext}`;
-      const uploadDir = path.join(process.cwd(), "public", "uploads", "logos");
-      await mkdir(uploadDir, { recursive: true });
-      const buffer = Buffer.from(await logoFile.arrayBuffer());
-      await writeFile(path.join(uploadDir, filename), buffer);
-      finalLogoUrl = `/uploads/logos/${filename}`;
+      // Unauthenticated public wizard — keep validation strict (images only, 5MB cap).
+      finalLogoUrl = await saveUpload("logos", logoFile, {
+        maxBytes: MAX_IMAGE_BYTES,
+        allowedTypes: IMAGE_MIME_TYPES,
+      });
     } catch (error) {
+      if (error instanceof UploadError) {
+        return { success: false, error: `Logo upload failed: ${error.message}` };
+      }
+      // Non-validation failures (disk, etc.) — register without a logo.
       console.error("LOGO_UPLOAD_ERROR", error);
     }
   }
@@ -94,6 +105,10 @@ export async function registerSchoolAction(formData: FormData) {
         data: {
           name: data.schoolName,
           slug: data.slug,
+          institutionType: data.institutionType,
+          // Affiliation only applies to higher-education institutions
+          affiliatedTo:
+            data.institutionType !== "SCHOOL" ? (data.affiliatedTo ?? null) : null,
           panNumber: data.panNumber,
           phone: data.phone,
           address: data.address,

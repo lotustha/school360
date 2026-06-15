@@ -7,7 +7,7 @@ import {
   UserPlus, Upload, ShieldCheck, Loader2, ExternalLink,
   PartyPopper, AlertCircle, Building2, Fingerprint, Sparkles,
   Terminal, Layers, CreditCard, GraduationCap, MapPin,
-  Smartphone, Clock, ArrowRight, Wifi,
+  Smartphone, Clock, ArrowRight, Wifi, BookOpen, Library,
 } from "lucide-react"
 import { registerSchoolAction } from "./actions"
 import { cn } from "@/lib/utils"
@@ -40,6 +40,25 @@ const MODULES = [
   { key: "EXAM_CAS",      label: "Exam & CAS",      desc: "Grades 1–12, NEB GPA, report cards",  price: 1500, icon: GraduationCap, badge: "NEB" },
   { key: "TRANSPORT_GPS", label: "Transport GPS",   desc: "Bus tracking, route management",       price: 500,  icon: MapPin,        badge: "GPS" },
   { key: "MOBILE_APP",    label: "Mobile App",      desc: "Parent & student app",                 price: 833,  icon: Smartphone,    badge: "App" },
+  { key: "HIGHER_EDUCATION", label: "Higher Education", desc: "Programmes, semesters, GPA, thesis",  price: 2500, icon: Library,       badge: "HE" },
+  { key: "ONLINE_LEARNING",  label: "Online Learning",  desc: "LMS courses, live classes, quizzes",  price: 1500, icon: BookOpen,      badge: "LMS" },
+]
+
+// P12 — institution type architecture. SCHOOL keeps the classic K-12 setup;
+// COLLEGE/UNIVERSITY unlock higher-education structures (programmes, semesters).
+const INSTITUTION_TYPES = [
+  { value: "SCHOOL",     label: "School",     icon: School,        desc: "Grades 1–12" },
+  { value: "COLLEGE",    label: "College",    icon: Library,       desc: "K-12 + Bachelor's" },
+  { value: "UNIVERSITY", label: "University", icon: GraduationCap, desc: "Bachelor's to PhD" },
+]
+
+const AFFILIATIONS = [
+  { value: "TU",  label: "Tribhuvan University (TU)" },
+  { value: "KU",  label: "Kathmandu University (KU)" },
+  { value: "PU",  label: "Pokhara University (PU)" },
+  { value: "PUF", label: "Purbanchal University (PUF)" },
+  { value: "FWU", label: "Far Western University (FWU)" },
+  { value: "MU",  label: "Mid-West University (MU)" },
 ]
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1]
@@ -138,7 +157,7 @@ export default function OnboardingPage() {
   const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN ?? "school360.com.np"
 
   const [form, setForm] = React.useState({
-    schoolName: "", panNumber: "", phone: "",
+    schoolName: "", institutionType: "SCHOOL", affiliatedTo: "", panNumber: "", phone: "",
     address: { province: "", district: "", municipality: "", wardNo: "", street: "" } as AddressValue,
     selectedModules: [] as string[], studentCount: 100,
     slug: "", themeColor: "#10b981",
@@ -494,6 +513,51 @@ export default function OnboardingPage() {
                 {/* ─ Step 1: Identity ─ */}
                 {step === 1 && (
                   <div className="space-y-5">
+                    {/* Institution type (P12) */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                        Institution Type
+                      </label>
+                      <div className="grid grid-cols-3 gap-2.5">
+                        {INSTITUTION_TYPES.map(t => {
+                          const active = form.institutionType === t.value
+                          const Icon = t.icon
+                          return (
+                            <button
+                              key={t.value}
+                              type="button"
+                              onClick={() => {
+                                set("institutionType", t.value)
+                                if (t.value === "SCHOOL") set("affiliatedTo", "")
+                              }}
+                              className={cn(
+                                "flex flex-col items-center gap-1 rounded-2xl border-2 p-3 transition-all cursor-pointer",
+                                active
+                                  ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
+                                  : "border-slate-100 bg-white/60 hover:border-slate-200 hover:bg-white/80"
+                              )}
+                            >
+                              <Icon className={cn("w-5 h-5", active ? "text-primary" : "text-slate-400")} />
+                              <span className={cn("text-xs font-bold", active ? "text-slate-900" : "text-slate-600")}>
+                                {t.label}
+                              </span>
+                              <span className="text-[10px] text-slate-400 leading-none">{t.desc}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    {form.institutionType !== "SCHOOL" && (
+                      <SelectField
+                        label="Affiliated To (optional)"
+                        id="affiliatedTo"
+                        value={form.affiliatedTo}
+                        onChange={e => set("affiliatedTo", e.target.value)}
+                        options={AFFILIATIONS}
+                      />
+                    )}
+
                     <Field label="School Name" id="schoolName" icon={Building2}
                       value={form.schoolName} onChange={e => set("schoolName", e.target.value)}
                       error={errors.schoolName} placeholder="e.g. Modern Gyan Academy" />

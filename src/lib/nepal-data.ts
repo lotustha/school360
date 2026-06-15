@@ -92,3 +92,7 @@ export const ACADEMIC_LEVELS = [
 export const NATIONALITY_OPTIONS = [
   "Nepali","Indian","Chinese","Other",
 ] as const
+
+// Nepal education guideline: minimum attendance percentage required
+// for a student to sit final examinations.
+export const MIN_ATTENDANCE_PCT = 75

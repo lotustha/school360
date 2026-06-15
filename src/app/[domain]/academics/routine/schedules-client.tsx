@@ -64,7 +64,8 @@ export function SchedulesClient({ schoolId, workingDays, schedules, classes }: P
     if (!confirm(`Delete schedule "${s.name}"?`)) return
     startT(async () => {
       try {
-        await deleteSchedule(s.id)
+        const res = await deleteSchedule(s.id)
+        if (!res.ok) { toast.error(res.error); return }
         toast.success("Schedule deleted")
         router.refresh()
       } catch (err) {

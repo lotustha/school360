@@ -12,6 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import type { NoticeRow } from "@/actions/notices"
 
 // ─── Animation Variants ──────────────────────────────────────────────────────
 
@@ -83,11 +84,12 @@ interface DashboardData {
   }
   trial: { isActive: boolean; daysLeft: number; plan: string }
   activeModules: string[]
+  notices: NoticeRow[]
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export function DashboardClient({ data }: { data: DashboardData }) {
-  const { school, trial, activeModules } = data
+  const { school, trial, activeModules, notices } = data
   const prefersReduced = useReducedMotion()
 
   const statsCards = [
@@ -307,17 +309,57 @@ export function DashboardClient({ data }: { data: DashboardData }) {
 
           {/* Notice Board */}
           <motion.div variants={item} className="glass rounded-xl p-5 border border-white/25 dark:border-white/8">
-            <div className="flex items-center gap-2 mb-4">
-              <Bell className="w-4 h-4 text-muted-foreground" />
-              <h3 className="text-sm font-semibold">Notice Board</h3>
-            </div>
-            <div className="text-center py-4">
-              <div className="w-10 h-10 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-2">
-                <Bell className="w-5 h-5 text-muted-foreground" />
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Bell className="w-4 h-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Notice Board</h3>
               </div>
-              <p className="text-xs text-muted-foreground">No announcements yet</p>
-              <p className="text-[11px] text-muted-foreground/60 mt-0.5">Notices will appear here</p>
+              <Link href="/notices" className="text-[11px] font-bold text-primary hover:underline inline-flex items-center gap-0.5">
+                View all <ChevronRight className="w-3 h-3" />
+              </Link>
             </div>
+            {notices.length === 0 ? (
+              <div className="text-center py-4">
+                <div className="w-10 h-10 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-2">
+                  <Bell className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <p className="text-xs text-muted-foreground">No announcements yet</p>
+                <p className="text-[11px] text-muted-foreground/60 mt-0.5">Notices will appear here</p>
+              </div>
+            ) : (
+              <ul className="space-y-3">
+                {notices.map((n) => (
+                  <li key={n.id}>
+                    <Link href="/notices" className="group flex items-start gap-2.5">
+                      <span
+                        className={cn(
+                          "mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0",
+                          n.priority === "URGENT" ? "bg-rose-500"
+                            : n.priority === "HIGH" ? "bg-amber-500"
+                            : "bg-primary/60",
+                        )}
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium leading-snug truncate group-hover:text-primary transition-colors">
+                          {n.title}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground/70 mt-0.5">
+                          {n.publishedAtBS ?? new Date(n.publishedAt).toLocaleDateString()}
+                          {n.priority !== "NORMAL" && (
+                            <span className={cn(
+                              "ml-1.5 font-bold uppercase tracking-wider",
+                              n.priority === "URGENT" ? "text-rose-600" : "text-amber-600",
+                            )}>
+                              {n.priority}
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
           </motion.div>
         </div>
       </div>

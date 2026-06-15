@@ -12,13 +12,15 @@ export async function GET(req: Request) {
     const notices = await prisma.notice.findMany({
       where: {
         schoolId: session.schoolId,
-        OR: [
-          { targetRole: "ALL" },
-          { targetRole: "TEACHER" },
-          { targetRole: null }
-        ]
+        isActive: true,
+        AND: [
+          // not expired
+          { OR: [{ expiresAt: null }, { expiresAt: { gte: new Date() } }] },
+          // teacher-relevant audiences (legacy targetRole field kept in sync by src/actions/notices.ts)
+          { OR: [{ targetRole: "ALL" }, { targetRole: "TEACHER" }, { targetRole: null }] },
+        ],
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: { publishedAt: "desc" },
     });
 
     return NextResponse.json(notices);

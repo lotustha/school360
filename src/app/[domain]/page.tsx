@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { getTrialStatus, getActiveModules } from "@/lib/modules"
+import { getDashboardNotices } from "@/actions/notices"
 import { DashboardClient } from "./dashboard-client"
 
 export const metadata: Metadata = {
@@ -34,12 +35,13 @@ export default async function TenantDashboardPage({
 
   if (!school) notFound()
 
-  const [trial, activeModules] = await Promise.all([
+  const [trial, activeModules, notices] = await Promise.all([
     getTrialStatus(school.id),
     getActiveModules(school.id),
+    getDashboardNotices(4).catch(() => []),
   ])
 
   return (
-    <DashboardClient data={{ school, trial, activeModules }} />
+    <DashboardClient data={{ school, trial, activeModules, notices }} />
   )
 }

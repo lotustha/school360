@@ -3,6 +3,32 @@
 import { prisma } from "@/lib/prisma"
 import { compareClassNames } from "@/lib/class-sort"
 import { revalidatePath } from "next/cache"
+import { requirePermission } from "@/lib/permissions"
+
+// Typed result for schedule mutations. Thrown errors are masked to a generic
+// "Server Error" in production builds, so user-facing failures (validation,
+// permission, in-use guards) must travel as return values instead.
+export type ScheduleActionResult =
+  | { ok: true; id?: string }
+  | { ok: false; error: string }
+
+/** Resolve session + academic:manage permission, or a friendly error. */
+async function guardManage() {
+  try {
+    return await requirePermission("academic:manage")
+  } catch {
+    return null
+  }
+}
+
+/** Verify the schedule exists and belongs to the caller's school. */
+async function findOwnSchedule(scheduleId: string, schoolId: string) {
+  const s = await prisma.periodSchedule.findUnique({
+    where: { id: scheduleId },
+    select: { id: true, schoolId: true },
+  })
+  return s && s.schoolId === schoolId ? s : null
+}
 
 // ─── PeriodSchedule (time-slot templates) ───────────────────────────────────
 
@@ -32,22 +58,36 @@ export async function createSchedule(data: {
   schoolId:    string
   name:        string
   description?: string
-}) {
+}): Promise<ScheduleActionResult> {
+  const session = await guardManage()
+  if (!session) return { ok: false, error: "You don't have permission to manage schedules." }
+  if (!data.name.trim()) return { ok: false, error: "Name is required." }
+
   const s = await prisma.periodSchedule.create({
     data: {
-      schoolId:    data.schoolId,
+      // Always the caller's own school — never trust a client-supplied id.
+      schoolId:    session.user.schoolId!,
       name:        data.name,
       description: data.description ?? null,
     },
   })
   revalidatePath("/academics/routine")
-  return s
+  return { ok: true, id: s.id }
 }
 
 export async function updateSchedule(id: string, data: {
   name?:        string
   description?: string
-}) {
+}): Promise<ScheduleActionResult> {
+  const session = await guardManage()
+  if (!session) return { ok: false, error: "You don't have permission to manage schedules." }
+  if (!(await findOwnSchedule(id, session.user.schoolId!))) {
+    return { ok: false, error: "Schedule not found." }
+  }
+  if (data.name !== undefined && !data.name.trim()) {
+    return { ok: false, error: "Name is required." }
+  }
+
   await prisma.periodSchedule.update({
     where: { id },
     data: {
@@ -56,15 +96,23 @@ export async function updateSchedule(id: string, data: {
     },
   })
   revalidatePath("/academics/routine")
+  return { ok: true }
 }
 
-export async function deleteSchedule(id: string) {
+export async function deleteSchedule(id: string): Promise<ScheduleActionResult> {
+  const session = await guardManage()
+  if (!session) return { ok: false, error: "You don't have permission to manage schedules." }
+  if (!(await findOwnSchedule(id, session.user.schoolId!))) {
+    return { ok: false, error: "Schedule not found." }
+  }
+
   const adopters = await prisma.class.count({ where: { periodScheduleId: id } })
   if (adopters > 0) {
-    throw new Error(`Cannot delete: ${adopters} class${adopters === 1 ? "" : "es"} use this schedule.`)
+    return { ok: false, error: `Cannot delete: ${adopters} class${adopters === 1 ? "" : "es"} use this schedule.` }
   }
   await prisma.periodSchedule.delete({ where: { id } })
   revalidatePath("/academics/routine")
+  return { ok: true }
 }
 
 // ─── Period slots: merge-by-id editor ───────────────────────────────────────
@@ -77,18 +125,23 @@ export type SlotInput = {
   isBreak:    boolean
 }
 
-export async function setScheduleSlots(scheduleId: string, slots: SlotInput[]) {
+export async function setScheduleSlots(scheduleId: string, slots: SlotInput[]): Promise<ScheduleActionResult> {
+  const session = await guardManage()
+  if (!session) return { ok: false, error: "You don't have permission to manage schedules." }
+  if (!(await findOwnSchedule(scheduleId, session.user.schoolId!))) {
+    return { ok: false, error: "Schedule not found." }
+  }
   if (slots.length === 0) {
-    throw new Error("Schedule needs at least one slot")
+    return { ok: false, error: "Schedule needs at least one slot" }
   }
   // Basic validation
   for (const s of slots) {
     if (!/^\d{2}:\d{2}$/.test(s.startTime) || !/^\d{2}:\d{2}$/.test(s.endTime)) {
-      throw new Error(`Invalid time format for "${s.label}". Use HH:MM.`)
+      return { ok: false, error: `Invalid time format for "${s.label}". Use HH:MM.` }
     }
-    if (!s.label.trim()) throw new Error("Every slot needs a label")
+    if (!s.label.trim()) return { ok: false, error: "Every slot needs a label" }
     if (s.startTime >= s.endTime) {
-      throw new Error(`"${s.label}": end time must be after start time`)
+      return { ok: false, error: `"${s.label}": end time must be after start time` }
     }
   }
 
@@ -142,12 +195,20 @@ export async function setScheduleSlots(scheduleId: string, slots: SlotInput[]) {
   })
 
   revalidatePath("/academics/routine")
+  return { ok: true }
 }
 
 // ─── Apply schedule to many classes ─────────────────────────────────────────
 
-export async function applyScheduleToClasses(scheduleId: string, classIds: string[]) {
-  if (classIds.length === 0) return { applied: 0, warnings: [] as string[] }
+export async function applyScheduleToClasses(
+  scheduleId: string, classIds: string[],
+): Promise<{ applied: number; warnings: string[]; error?: string }> {
+  const session = await guardManage()
+  if (!session) return { applied: 0, warnings: [], error: "You don't have permission to manage schedules." }
+  if (!(await findOwnSchedule(scheduleId, session.user.schoolId!))) {
+    return { applied: 0, warnings: [], error: "Schedule not found." }
+  }
+  if (classIds.length === 0) return { applied: 0, warnings: [] }
   // Warn about classes whose existing routine entries reference slots from a
   // different schedule (those entries will orphan since their periodSlotId
   // still points at the old schedule's slots).
@@ -161,13 +222,13 @@ export async function applyScheduleToClasses(scheduleId: string, classIds: strin
   })
   const warnings = conflicts.map(c => `${c.class.name} has existing routine entries from a different schedule that will become orphaned.`)
 
-  await prisma.class.updateMany({
-    where: { id: { in: classIds } },
+  const updated = await prisma.class.updateMany({
+    where: { id: { in: classIds }, schoolId: session.user.schoolId! },
     data:  { periodScheduleId: scheduleId },
   })
   revalidatePath("/academics/routine")
   revalidatePath("/academics/classes")
-  return { applied: classIds.length, warnings }
+  return { applied: updated.count, warnings }
 }
 
 // ─── Class routine fetch (full grid) ────────────────────────────────────────

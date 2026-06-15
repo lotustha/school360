@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getMobileSession } from "@/lib/mobile-auth";
-import { writeFile, mkdir } from "fs/promises";
-import { join } from "path";
-import { existsSync } from "fs";
+import { saveUpload, UploadError, DOCUMENT_MIME_TYPES, MAX_DOCUMENT_BYTES } from "@/lib/storage";
 
 export async function GET(req: Request) {
   try {
@@ -45,20 +43,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-    
-    // Save to local storage (public/uploads)
-    const uploadDir = join(process.cwd(), "public", "uploads", "materials");
-    if (!existsSync(uploadDir)) {
-      await mkdir(uploadDir, { recursive: true });
+    let fileUrl: string;
+    try {
+      fileUrl = await saveUpload("materials", file, {
+        maxBytes: MAX_DOCUMENT_BYTES,
+        allowedTypes: DOCUMENT_MIME_TYPES,
+      });
+    } catch (e) {
+      if (e instanceof UploadError) {
+        return NextResponse.json({ error: e.message }, { status: e.status });
+      }
+      throw e;
     }
-    
-    const fileName = `${Date.now()}-${file.name.replace(/\s+/g, '-')}`;
-    const filePath = join(uploadDir, fileName);
-    await writeFile(filePath, buffer);
-    
-    const fileUrl = `/uploads/materials/${fileName}`;
 
     const material = await prisma.studyMaterial.create({
       data: {

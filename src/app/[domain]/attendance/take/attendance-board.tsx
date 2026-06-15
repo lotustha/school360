@@ -26,6 +26,7 @@ interface Props {
   sectionId:  string
   sectionName: string
   dateBS:     string
+  period?:    number                            // 1-8 for period-wise (Grade 6+), undefined = daily
   students:   StudentRow[]
   existing:   Record<string, AttendanceStatus>  // studentId → status
 }
@@ -41,7 +42,7 @@ const STATUSES = Object.keys(STATUS_CONFIG) as AttendanceStatus[]
 
 export function AttendanceBoard({
   schoolId, takenById, classId, className, sectionId, sectionName,
-  dateBS, students, existing,
+  dateBS, period, students, existing,
 }: Props) {
   const router = useRouter()
   const [records, setRecords] = React.useState<Record<string, AttendanceStatus>>(
@@ -80,6 +81,7 @@ export function AttendanceBoard({
         classId,
         sectionId,
         dateBS,
+        period,
         records: students.map(s => ({ studentId: s.id, status: records[s.id] })),
       })
       setSaved(true)
@@ -100,7 +102,9 @@ export function AttendanceBoard({
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-0.5">
             <p className="font-semibold">{className} — Section {sectionName}</p>
-            <p className="text-sm text-muted-foreground">{formatBS(dateBS)} · {students.length} students</p>
+            <p className="text-sm text-muted-foreground">
+              {formatBS(dateBS)}{period ? ` · Period ${period}` : ""} · {students.length} students
+            </p>
           </div>
 
           {/* Summary pills */}

@@ -19,10 +19,10 @@ export default async function TakeAttendancePage({
   searchParams,
 }: {
   params:       Promise<{ domain: string }>
-  searchParams: Promise<{ classId?: string; sectionId?: string; dateBS?: string }>
+  searchParams: Promise<{ classId?: string; sectionId?: string; dateBS?: string; period?: string }>
 }) {
   const { domain } = await params
-  const { classId, sectionId, dateBS: rawDateBS } = await searchParams
+  const { classId, sectionId, dateBS: rawDateBS, period: rawPeriod } = await searchParams
   const dateBS = rawDateBS ?? todayBS()
 
   const [school, session] = await Promise.all([
@@ -65,6 +65,13 @@ export default async function TakeAttendancePage({
     )
   }
 
+  // Period-wise attendance only for secondary classes (Grade 6+, Nepal guideline).
+  const gradeMatch     = activeClass.name.match(/\d+/)
+  const gradeNum       = gradeMatch ? parseInt(gradeMatch[0], 10) : null
+  const supportsPeriods = gradeNum !== null && gradeNum >= 6
+  const parsedPeriod   = rawPeriod ? parseInt(rawPeriod, 10) : NaN
+  const period         = supportsPeriods && parsedPeriod >= 1 && parsedPeriod <= 8 ? parsedPeriod : undefined
+
   // Fetch students in this section
   const students = await prisma.student.findMany({
     where: { schoolId: school.id, classId: activeClassId, sectionId: activeSectionId, status: "ACTIVE" },
@@ -73,7 +80,7 @@ export default async function TakeAttendancePage({
   })
 
   // Existing attendance for pre-filling
-  const existingRecords = await getAttendanceForDate(school.id, activeClassId, dateBS, activeSectionId)
+  const existingRecords = await getAttendanceForDate(school.id, activeClassId, dateBS, activeSectionId, period)
   const existing: Record<string, AttendanceStatus> = {}
   existingRecords.forEach(r => { existing[r.studentId] = r.status as AttendanceStatus })
 
@@ -97,7 +104,9 @@ export default async function TakeAttendancePage({
           </Link>
           <div>
             <h1 className="text-lg font-semibold">Take Attendance</h1>
-            <p className="text-xs text-muted-foreground">{dateBS}</p>
+            <p className="text-xs text-muted-foreground">
+              {dateBS}{period ? ` · Period ${period}` : ""}
+            </p>
           </div>
         </div>
 
@@ -122,6 +131,38 @@ export default async function TakeAttendancePage({
         </div>
       </div>
 
+      {/* Period selector — secondary classes (Grade 6+) can take period-wise attendance */}
+      {supportsPeriods && (
+        <div className="bg-white/70 backdrop-blur-xl rounded-xl border border-white/40 p-3 flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] uppercase tracking-widest font-black text-slate-400 mr-1">
+            Period
+          </span>
+          <Link href={`/attendance/take?classId=${activeClassId}&sectionId=${activeSectionId}&dateBS=${dateBS}`}>
+            <button className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              !period
+                ? "bg-primary text-white shadow-md shadow-primary/25"
+                : "bg-muted/60 text-muted-foreground hover:bg-muted"
+            }`}>
+              Daily
+            </button>
+          </Link>
+          {Array.from({ length: 8 }, (_, i) => i + 1).map(p => (
+            <Link
+              key={p}
+              href={`/attendance/take?classId=${activeClassId}&sectionId=${activeSectionId}&dateBS=${dateBS}&period=${p}`}
+            >
+              <button className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                period === p
+                  ? "bg-primary text-white shadow-md shadow-primary/25"
+                  : "bg-muted/60 text-muted-foreground hover:bg-muted"
+              }`}>
+                P{p}
+              </button>
+            </Link>
+          ))}
+        </div>
+      )}
+
       {students.length === 0 ? (
         <div className="bg-white/70 backdrop-blur-xl rounded-xl border border-white/40 p-12 text-center">
           <p className="text-muted-foreground font-medium">No active students in {activeClass.name} — {activeSection.name}.</p>
@@ -138,6 +179,7 @@ export default async function TakeAttendancePage({
           sectionId={activeSectionId}
           sectionName={activeSection.name}
           dateBS={dateBS}
+          period={period}
           students={studentRows}
           existing={existing}
         />

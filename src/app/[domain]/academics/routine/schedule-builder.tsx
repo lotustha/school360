@@ -99,17 +99,25 @@ export function ScheduleBuilder({ schoolId, editing, onClose }: Props) {
   async function handleSave() {
     if (!name.trim()) { toast.error("Name is required"); return }
     if (slots.length === 0) { toast.error("Add at least one slot"); return }
+    // Validate locally first so the user gets the precise message immediately.
+    for (const s of slots) {
+      if (!s.label.trim())          { toast.error("Every slot needs a label"); return }
+      if (s.startTime >= s.endTime) { toast.error(`"${s.label}": end time must be after start time`); return }
+    }
     startT(async () => {
       try {
         let scheduleId = editing?.id
         if (isEdit && editing) {
-          await updateSchedule(editing.id, { name, description })
+          const res = await updateSchedule(editing.id, { name, description })
+          if (!res.ok) { toast.error(res.error); return }
         } else {
-          const created = await createSchedule({ schoolId, name, description })
-          scheduleId = created.id
+          const res = await createSchedule({ schoolId, name, description })
+          if (!res.ok) { toast.error(res.error); return }
+          scheduleId = res.id
         }
-        if (!scheduleId) throw new Error("Could not resolve schedule id")
-        await setScheduleSlots(scheduleId, slots.map(s => ({ id: s.id, startTime: s.startTime, endTime: s.endTime, label: s.label, isBreak: s.isBreak })))
+        if (!scheduleId) { toast.error("Could not resolve schedule id"); return }
+        const slotsRes = await setScheduleSlots(scheduleId, slots.map(s => ({ id: s.id, startTime: s.startTime, endTime: s.endTime, label: s.label, isBreak: s.isBreak })))
+        if (!slotsRes.ok) { toast.error(slotsRes.error); return }
         toast.success(isEdit ? "Schedule updated" : "Schedule created")
         onClose()
       } catch (err) {

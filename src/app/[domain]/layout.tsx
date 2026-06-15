@@ -6,6 +6,8 @@ import { Bell } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { HeaderTabs } from "@/components/header-tabs"
 import { HeaderBreadcrumb } from "@/components/header-breadcrumb"
+import { InstitutionProvider } from "@/components/institution-provider"
+import { getInstitutionTypeBySlug } from "@/lib/institution"
 
 export default async function TenantLayout({
   children,
@@ -16,7 +18,13 @@ export default async function TenantLayout({
 }) {
   const { domain } = await params
 
+  // Phase 12 — institution type gates which nav sections / routes activate.
+  // SCHOOL (default) keeps the current K-12 experience unchanged; COLLEGE /
+  // UNIVERSITY unlock the higher-education sections as they ship (Phases 24+).
+  const institutionType = await getInstitutionTypeBySlug(domain)
+
   return (
+    <InstitutionProvider institutionType={institutionType}>
     <SidebarProvider>
       <AppSidebar />
       {/* bg-transparent overrides the hardcoded bg-background on SidebarInset */}
@@ -60,5 +68,6 @@ export default async function TenantLayout({
         </main>
       </SidebarInset>
     </SidebarProvider>
+    </InstitutionProvider>
   )
 }

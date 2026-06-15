@@ -38,6 +38,7 @@ export function ApplyScheduleDialog({ schedule, classes, onClose }: Props) {
     startT(async () => {
       try {
         const res = await applyScheduleToClasses(schedule.id, [...picks])
+        if (res.error) { toast.error(res.error); return }
         toast.success(`Applied to ${res.applied} class${res.applied === 1 ? "" : "es"}`)
         if (res.warnings.length > 0) {
           res.warnings.forEach(w => toast.warning(w))

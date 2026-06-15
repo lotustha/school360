@@ -20,6 +20,10 @@
 # production
 /build
 
+# uploaded tenant files (local-disk storage — see src/lib/storage.ts)
+/public/uploads/*
+!/public/uploads/.gitkeep
+
 # misc
 .DS_Store
 *.pem
