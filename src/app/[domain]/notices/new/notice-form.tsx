@@ -1,6 +1,6 @@
 "use client"
 
-import { useTransition } from "react"
+import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -12,14 +12,8 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
-import { createNotice } from "@/actions/notices"
-
-const AUDIENCES = [
-  { value: "ALL",      label: "Everyone" },
-  { value: "STUDENTS", label: "Students" },
-  { value: "STAFF",    label: "Staff" },
-  { value: "PARENTS",  label: "Parents" },
-] as const
+import { createNotice, type NoticeTargetOptions } from "@/actions/notices"
+import { AudiencePicker, type AudienceValue } from "../audience-picker"
 
 const PRIORITIES = [
   { value: "NORMAL", label: "Normal", icon: Minus,         activeCls: "bg-slate-700 text-white border-slate-700" },
@@ -30,37 +24,41 @@ const PRIORITIES = [
 const formSchema = z.object({
   title:     z.string().min(1, "Title is required").max(200, "Max 200 characters"),
   body:      z.string().min(1, "Notice body is required").max(10_000, "Max 10,000 characters"),
-  audience:  z.enum(["ALL", "STUDENTS", "STAFF", "PARENTS"]),
   priority:  z.enum(["NORMAL", "HIGH", "URGENT"]),
   expiresAt: z.string().optional(), // "YYYY-MM-DD" or ""
 })
 
 type FormValues = z.infer<typeof formSchema>
 
-export function NoticeForm() {
+export function NoticeForm({ targets }: { targets: NoticeTargetOptions }) {
   const router = useRouter()
   const [pending, start] = useTransition()
+  const [audience, setAudience] = useState<AudienceValue>({ targetType: "SCHOOL", targetIds: [] })
 
   const {
     register, handleSubmit, watch, setValue,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { title: "", body: "", audience: "ALL", priority: "NORMAL", expiresAt: "" },
+    defaultValues: { title: "", body: "", priority: "NORMAL", expiresAt: "" },
   })
 
-  const audience = watch("audience")
   const priority = watch("priority")
 
   function onSubmit(values: FormValues) {
+    if ((audience.targetType === "STUDENTS" || audience.targetType === "STAFF") && audience.targetIds.length === 0) {
+      toast.error(`Select at least one ${audience.targetType === "STUDENTS" ? "student" : "staff member"}`)
+      return
+    }
     start(async () => {
       try {
         await createNotice({
-          title:     values.title,
-          body:      values.body,
-          audience:  values.audience,
-          priority:  values.priority,
-          expiresAt: values.expiresAt ? values.expiresAt : null,
+          title:      values.title,
+          body:       values.body,
+          priority:   values.priority,
+          expiresAt:  values.expiresAt ? values.expiresAt : null,
+          targetType: audience.targetType,
+          targetIds:  audience.targetIds,
         })
         toast.success("Notice published")
         router.push("/notices")
@@ -92,25 +90,9 @@ export function NoticeForm() {
       </div>
 
       <div className="space-y-1.5">
-        <Label>Audience</Label>
-        <div className="flex flex-wrap gap-2">
-          {AUDIENCES.map(a => (
-            <button
-              key={a.value}
-              type="button"
-              onClick={() => setValue("audience", a.value, { shouldValidate: true })}
-              className={cn(
-                "h-9 px-4 rounded-xl border text-xs font-bold cursor-pointer transition",
-                audience === a.value
-                  ? "bg-primary text-primary-foreground border-primary shadow-sm"
-                  : "bg-white/75 border-slate-200 text-slate-500 hover:border-slate-300",
-              )}
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
-        <p className="text-[10px] text-slate-400">Who this notice is addressed to.</p>
+        <Label>Send to</Label>
+        <AudiencePicker targets={targets} value={audience} onChange={setAudience} />
+        <p className="text-[10px] text-slate-400">Pick exactly who should receive this notice.</p>
       </div>
 
       <div className="space-y-1.5">

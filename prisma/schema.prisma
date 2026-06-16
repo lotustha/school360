@@ -2030,7 +2030,12 @@ model Notice {
   targetRole  String?  // legacy audience field, e.g., "TEACHER", "STUDENT", "ALL"
 
   // Notice board extension (P1C)
-  audience    String    @default("ALL")    // ALL | STUDENTS | STAFF | PARENTS
+  audience    String    @default("ALL")    // ALL | STUDENTS | STAFF | PARENTS (coarse bucket, kept for mobile/back-compat)
+  // Fine-grained targeting. targetType ∈ SCHOOL | STUDENTS_ALL | STAFF_ALL |
+  // CLASS | SECTION | FACULTY | GROUP | STUDENTS | STAFF. targetIds is a string[]
+  // (classId / sectionId / facultyId / groupId, or a list of studentIds / userIds).
+  targetType  String    @default("SCHOOL")
+  targetIds   Json?
   priority    String    @default("NORMAL") // NORMAL | HIGH | URGENT
   publishedAt DateTime  @default(now())
   expiresAt   DateTime?

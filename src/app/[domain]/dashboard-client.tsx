@@ -13,6 +13,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { NoticeRow } from "@/actions/notices"
+import type { UpcomingEventRow } from "@/actions/calendar"
+import { todayBS, formatBS, formatAD, toADSafe } from "@/lib/nepali-date"
+import { eventColor, EVENT_TYPE_META, type CalendarEventType } from "@/lib/calendar-events"
 
 // ─── Animation Variants ──────────────────────────────────────────────────────
 
@@ -85,11 +88,13 @@ interface DashboardData {
   trial: { isActive: boolean; daysLeft: number; plan: string }
   activeModules: string[]
   notices: NoticeRow[]
+  upcomingEvents: UpcomingEventRow[]
+  academicYear: string
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export function DashboardClient({ data }: { data: DashboardData }) {
-  const { school, trial, activeModules, notices } = data
+  const { school, trial, activeModules, notices, upcomingEvents, academicYear } = data
   const prefersReduced = useReducedMotion()
 
   const statsCards = [
@@ -151,7 +156,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
                 </p>
                 <h1 className="text-2xl font-bold tracking-tight">{school.name}</h1>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  Academic Year 2081/82 · {school.slug}.school360.com.np
+                  Academic Year {academicYear} · {school.slug}.school360.com.np
                 </p>
               </div>
             </div>
@@ -159,7 +164,7 @@ export function DashboardClient({ data }: { data: DashboardData }) {
             <div className="flex flex-col items-end gap-2">
               <Badge className="bg-primary/10 text-primary border-primary/25 hover:bg-primary/15 text-xs">
                 <TrendingUp className="w-3 h-3 mr-1" />
-                2081/82
+                {academicYear}
               </Badge>
               {trial.plan === "TRIAL" && (
                 <motion.div
@@ -361,6 +366,11 @@ export function DashboardClient({ data }: { data: DashboardData }) {
               </ul>
             )}
           </motion.div>
+
+          {/* Academic Calendar */}
+          <motion.div variants={item}>
+            <CalendarWidget events={upcomingEvents} />
+          </motion.div>
         </div>
       </div>
 
@@ -403,5 +413,71 @@ export function DashboardClient({ data }: { data: DashboardData }) {
       </motion.div>
 
     </motion.div>
+  )
+}
+
+// ─── Academic Calendar Widget ──────────────────────────────────────────────────
+function CalendarWidget({ events }: { events: UpcomingEventRow[] }) {
+  const today = todayBS()
+  const todayAd = toADSafe(today)
+
+  return (
+    <div className="glass rounded-xl p-5 border border-white/25 dark:border-white/8">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <CalendarDays className="w-4 h-4 text-muted-foreground" />
+          <h3 className="text-sm font-semibold">Academic Calendar</h3>
+        </div>
+        <Link href="/calendar" className="text-[11px] font-bold text-primary hover:underline inline-flex items-center gap-0.5">
+          Open <ChevronRight className="w-3 h-3" />
+        </Link>
+      </div>
+
+      {/* Today, both calendars */}
+      <div className="rounded-lg bg-primary/5 border border-primary/15 px-3 py-2 mb-3">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-primary/70">Today</p>
+        <p className="text-sm font-bold text-foreground leading-tight">{formatBS(today)}</p>
+        {todayAd && <p className="text-[11px] text-muted-foreground">{formatAD(todayAd)}</p>}
+      </div>
+
+      {events.length === 0 ? (
+        <div className="text-center py-4">
+          <div className="w-10 h-10 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-2">
+            <CalendarDays className="w-5 h-5 text-muted-foreground" />
+          </div>
+          <p className="text-xs text-muted-foreground">No upcoming events</p>
+          <p className="text-[11px] text-muted-foreground/60 mt-0.5">Holidays and events will show here</p>
+        </div>
+      ) : (
+        <ul className="space-y-3">
+          {events.map(ev => {
+            const c  = eventColor(ev.eventType, ev.color)
+            const ad = toADSafe(ev.dateBS)
+            return (
+              <li key={ev.id}>
+                <Link href="/calendar" className="group flex items-start gap-2.5">
+                  <span className="mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: c }} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium leading-snug truncate group-hover:text-primary transition-colors">
+                      {ev.title}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground/70 mt-0.5">
+                      {formatBS(ev.dateBS)}{ad && <span className="text-muted-foreground/50"> · {formatAD(ad)}</span>}
+                      {ev.isHoliday && <span className="ml-1.5 font-bold uppercase tracking-wider text-rose-500">Off</span>}
+                    </p>
+                  </div>
+                  <span
+                    className="text-[9px] uppercase tracking-wider font-black px-1.5 py-0.5 rounded shrink-0"
+                    style={{ backgroundColor: `${c}1f`, color: c }}
+                  >
+                    {EVENT_TYPE_META[ev.eventType as CalendarEventType]?.label ?? ev.eventType}
+                  </span>
+                </Link>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
   )
 }

@@ -35,6 +35,31 @@ export function bsMonthName(month: number): string {
   return BS_MONTHS[month - 1] ?? ""
 }
 
+const AD_MONTHS = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+]
+
+/** Full English month name for a 1-indexed AD month. */
+export function adMonthName(month: number): string {
+  return AD_MONTHS[month - 1] ?? ""
+}
+
+/** "Jun 16, 2026" from a JS Date (AD). */
+export function formatAD(date: Date): string {
+  return `${AD_MONTHS[date.getMonth()].slice(0, 3)} ${date.getDate()}, ${date.getFullYear()}`
+}
+
+/** BS → AD, returning null instead of throwing when the BS year is unconfigured. */
+export function toADSafe(bsStr: string): Date | null {
+  try { return toAD(bsStr) } catch { return null }
+}
+
+/** AD → BS, returning null instead of throwing at calendar-data edges. */
+export function toBSSafe(date: Date): string | null {
+  try { return toBS(date) } catch { return null }
+}
+
 export function currentBSYear(): number {
   return new NepaliDate().getYear()
 }

@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/auth"
 import { hasPermission } from "@/lib/permissions"
-import { getNotices, type NoticeRow } from "@/actions/notices"
+import { getNotices, getNoticeTargets, type NoticeRow, type NoticeTargetOptions } from "@/actions/notices"
 import { Megaphone, AlertTriangle, CalendarClock, Archive, ShieldAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { NoticesClient } from "./notices-client"
@@ -42,6 +42,9 @@ export default async function NoticesPage({
   }
 
   const canManage = await hasPermission(session, "notice:manage")
+  const targets: NoticeTargetOptions = canManage
+    ? await getNoticeTargets()
+    : { classes: [], faculties: [], groups: [], students: [], staff: [] }
 
   const now = Date.now()
   const live = notices.filter(n => n.isActive && !n.isExpired)
@@ -73,7 +76,7 @@ export default async function NoticesPage({
         <Stat label="Taken down"     value={`${downCount}`}           sub="Expired or deactivated"    tone="slate"   icon={Archive} />
       </div>
 
-      <NoticesClient notices={notices} canManage={canManage} />
+      <NoticesClient notices={notices} canManage={canManage} targets={targets} />
     </div>
   )
 }

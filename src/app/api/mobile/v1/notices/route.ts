@@ -23,7 +23,17 @@ export async function GET(req: Request) {
       orderBy: { publishedAt: "desc" },
     });
 
-    return NextResponse.json(notices);
+    // Narrow person-targeted staff notices to this teacher (the coarse
+    // targetRole filter above can't see the fine-grained targetIds list).
+    const visible = notices.filter((n) => {
+      if (n.targetType === "STAFF") {
+        const ids = Array.isArray(n.targetIds) ? (n.targetIds as unknown[]) : [];
+        return ids.includes(session.id);
+      }
+      return true;
+    });
+
+    return NextResponse.json(visible);
   } catch (error) {
     console.error("Mobile Notices GET Error:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

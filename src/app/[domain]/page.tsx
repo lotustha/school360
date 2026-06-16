@@ -5,6 +5,8 @@ import { authOptions } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { getTrialStatus, getActiveModules } from "@/lib/modules"
 import { getDashboardNotices } from "@/actions/notices"
+import { getUpcomingEvents } from "@/actions/calendar"
+import { currentAcademicYear } from "@/lib/nepali-date"
 import { DashboardClient } from "./dashboard-client"
 
 export const metadata: Metadata = {
@@ -35,13 +37,20 @@ export default async function TenantDashboardPage({
 
   if (!school) notFound()
 
-  const [trial, activeModules, notices] = await Promise.all([
+  const [trial, activeModules, notices, upcomingEvents, currentYear] = await Promise.all([
     getTrialStatus(school.id),
     getActiveModules(school.id),
     getDashboardNotices(4).catch(() => []),
+    getUpcomingEvents(5).catch(() => []),
+    prisma.academicYear.findFirst({
+      where: { schoolId: school.id, isCurrent: true },
+      select: { name: true },
+    }),
   ])
 
+  const academicYear = currentYear?.name ?? currentAcademicYear().name
+
   return (
-    <DashboardClient data={{ school, trial, activeModules, notices }} />
+    <DashboardClient data={{ school, trial, activeModules, notices, upcomingEvents, academicYear }} />
   )
 }

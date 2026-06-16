@@ -3,9 +3,10 @@
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import { prisma } from "@/lib/prisma"
-import { requirePermission } from "@/lib/permissions"
+import { requirePermission, getSchoolSession } from "@/lib/permissions"
 import { CALENDAR_EVENT_TYPES, HOLIDAY_LIKE_TYPES } from "@/lib/calendar-events"
 import { holidaysForRangeBS } from "@/lib/nepal-holidays"
+import { todayBS } from "@/lib/nepali-date"
 
 // ─── Validation ──────────────────────────────────────────────────────────────
 
@@ -88,6 +89,45 @@ export async function listCalendarEvents(
   const monthStart = `${monthBS}-01`
   const monthEnd   = `${monthBS}-33` // lexicographic upper bound (BS months max 32 days)
   return mapped.filter(e => (e.endDateBS ?? e.dateBS) >= monthStart && e.dateBS <= monthEnd)
+}
+
+export interface UpcomingEventRow {
+  id:        string
+  title:     string
+  eventType: string
+  dateBS:    string
+  endDateBS: string | null
+  isHoliday: boolean
+  color:     string | null
+}
+
+/**
+ * Today's and upcoming events across the school, soonest first. Light read for
+ * the dashboard widget — any authenticated tenant user may see it (no
+ * calendar:view gate), mirroring getDashboardNotices.
+ */
+export async function getUpcomingEvents(limit = 5): Promise<UpcomingEventRow[]> {
+  const session = await getSchoolSession()
+  const schoolId = session.user.schoolId!
+  const today = todayBS()
+
+  // Zero-padded BS strings compare lexicographically. An event is upcoming/ongoing
+  // when its end (or its single date) is today or later.
+  return prisma.academicCalendarEvent.findMany({
+    where: {
+      schoolId,
+      OR: [
+        { endDateBS: { gte: today } },
+        { AND: [{ endDateBS: null }, { dateBS: { gte: today } }] },
+      ],
+    },
+    orderBy: [{ dateBS: "asc" }, { title: "asc" }],
+    take: limit,
+    select: {
+      id: true, title: true, eventType: true, dateBS: true,
+      endDateBS: true, isHoliday: true, color: true,
+    },
+  })
 }
 
 // ─── Mutations ───────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import { redirect } from "next/navigation"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/auth"
 import { hasPermission } from "@/lib/permissions"
+import { getNoticeTargets } from "@/actions/notices"
 import { ArrowLeft, Paperclip } from "lucide-react"
 import { NoticeForm } from "./notice-form"
 
@@ -20,6 +21,8 @@ export default async function NewNoticePage({
   if (!session?.user?.schoolId) redirect(`/${domain}/login?next=/notices/new`)
   if (!(await hasPermission(session, "notice:manage"))) redirect("/notices")
 
+  const targets = await getNoticeTargets()
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
@@ -35,7 +38,7 @@ export default async function NewNoticePage({
         </p>
       </div>
 
-      <NoticeForm />
+      <NoticeForm targets={targets} />
 
       <p className="text-[10px] text-slate-400 inline-flex items-center gap-1">
         <Paperclip className="w-3 h-3" />

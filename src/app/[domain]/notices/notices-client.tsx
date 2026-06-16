@@ -18,15 +18,19 @@ import {
 import { cn } from "@/lib/utils"
 import {
   updateNotice, toggleNoticeActive, deleteNotice,
-  type NoticeRow, type NoticeAudience, type NoticePriority,
+  type NoticeRow, type NoticePriority, type NoticeTargetOptions,
 } from "@/actions/notices"
+import { AudiencePicker, type AudienceValue } from "./audience-picker"
 
-const AUDIENCES = ["ALL", "STUDENTS", "STAFF", "PARENTS"] as const
 const PRIORITIES = ["NORMAL", "HIGH", "URGENT"] as const
 
-const AUDIENCE_LABEL: Record<string, string> = {
-  ALL: "Everyone", STUDENTS: "Students", STAFF: "Staff", PARENTS: "Parents",
-}
+// Coarse audience buckets for the list filter (the precise recipient is shown per card).
+const AUDIENCE_FILTER = [
+  { value: "ALL",      label: "Whole school" },
+  { value: "STUDENTS", label: "Students" },
+  { value: "STAFF",    label: "Staff" },
+  { value: "PARENTS",  label: "Parents" },
+] as const
 
 const PRIORITY_STYLE: Record<string, string> = {
   URGENT: "bg-rose-100 text-rose-700 border-rose-200",
@@ -37,9 +41,10 @@ const PRIORITY_STYLE: Record<string, string> = {
 interface Props {
   notices:   NoticeRow[]
   canManage: boolean
+  targets:   NoticeTargetOptions
 }
 
-export function NoticesClient({ notices, canManage }: Props) {
+export function NoticesClient({ notices, canManage, targets }: Props) {
   const router = useRouter()
   const [pending, start] = useTransition()
   const [q, setQ] = useState("")
@@ -95,7 +100,7 @@ export function NoticesClient({ notices, canManage }: Props) {
           className="h-10 px-3 bg-white/75 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
         >
           <option value="">All audiences</option>
-          {AUDIENCES.map(a => <option key={a} value={a}>{AUDIENCE_LABEL[a]}</option>)}
+          {AUDIENCE_FILTER.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
         </select>
         <select
           value={filterPriority}
@@ -154,6 +159,7 @@ export function NoticesClient({ notices, canManage }: Props) {
       {editing && (
         <EditNoticeDialog
           notice={editing}
+          targets={targets}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); router.refresh() }}
         />
@@ -213,7 +219,7 @@ function NoticeCard({
               {n.priority}
             </span>
             <span className="text-[10px] uppercase tracking-widest font-black px-1.5 py-0.5 rounded bg-primary/8 text-primary inline-flex items-center gap-1">
-              <Users className="w-3 h-3" />{AUDIENCE_LABEL[n.audience] ?? n.audience}
+              <Users className="w-3 h-3" />{n.targetLabel}
             </span>
             {!n.isActive && (
               <span className="text-[10px] uppercase tracking-widest font-black px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
@@ -280,25 +286,33 @@ function NoticeCard({
 // ─── Edit Dialog ──────────────────────────────────────────────────────────────
 
 function EditNoticeDialog({
-  notice, onClose, onSaved,
+  notice, targets, onClose, onSaved,
 }: {
-  notice: NoticeRow; onClose: () => void; onSaved: () => void
+  notice: NoticeRow; targets: NoticeTargetOptions; onClose: () => void; onSaved: () => void
 }) {
   const [pending, start] = useTransition()
   const [title, setTitle] = useState(notice.title)
   const [body, setBody] = useState(notice.body)
-  const [audience, setAudience] = useState<NoticeAudience>(notice.audience as NoticeAudience)
+  const [audience, setAudience] = useState<AudienceValue>({
+    targetType: notice.targetType as AudienceValue["targetType"],
+    targetIds:  notice.targetIds,
+  })
   const [priority, setPriority] = useState<NoticePriority>(notice.priority as NoticePriority)
   const [expiryDate, setExpiryDate] = useState(notice.expiryDate ?? "")
 
   function handleSave() {
+    if ((audience.targetType === "STUDENTS" || audience.targetType === "STAFF") && audience.targetIds.length === 0) {
+      toast.error(`Select at least one ${audience.targetType === "STUDENTS" ? "student" : "staff member"}`)
+      return
+    }
     start(async () => {
       try {
         await updateNotice({
           id: notice.id,
           title,
           body,
-          audience,
+          targetType: audience.targetType,
+          targetIds:  audience.targetIds,
           priority,
           expiresAt: expiryDate || null,
         })
@@ -310,7 +324,7 @@ function EditNoticeDialog({
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Notice</DialogTitle>
         </DialogHeader>
@@ -323,29 +337,20 @@ function EditNoticeDialog({
             <Label htmlFor="edit-body">Body</Label>
             <Textarea id="edit-body" value={body} onChange={e => setBody(e.target.value)} rows={6} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-audience">Audience</Label>
-              <select
-                id="edit-audience"
-                value={audience}
-                onChange={e => setAudience(e.target.value as NoticeAudience)}
-                className="w-full h-9 px-3 bg-white border border-slate-200 rounded-md text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
-              >
-                {AUDIENCES.map(a => <option key={a} value={a}>{AUDIENCE_LABEL[a]}</option>)}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-priority">Priority</Label>
-              <select
-                id="edit-priority"
-                value={priority}
-                onChange={e => setPriority(e.target.value as NoticePriority)}
-                className="w-full h-9 px-3 bg-white border border-slate-200 rounded-md text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
-              >
-                {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
+          <div className="space-y-1.5">
+            <Label>Send to</Label>
+            <AudiencePicker targets={targets} value={audience} onChange={setAudience} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-priority">Priority</Label>
+            <select
+              id="edit-priority"
+              value={priority}
+              onChange={e => setPriority(e.target.value as NoticePriority)}
+              className="w-full h-9 px-3 bg-white border border-slate-200 rounded-md text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
+            >
+              {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
           </div>
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
