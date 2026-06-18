@@ -72,6 +72,28 @@ async function main() {
     },
   })
 
+  // 3b. Activate an ACTIVE subscription with all add-on modules so gated
+  //     modules (LMS / Online Learning, etc.) are reachable in dev.
+  console.log('Seeding subscription & modules...')
+  const subEndsAt = new Date()
+  subEndsAt.setFullYear(subEndsAt.getFullYear() + 5)
+  const subscription = await prisma.schoolSubscription.upsert({
+    where: { schoolId: school.id },
+    update: { plan: 'ACTIVE', trialEndsAt: subEndsAt },
+    create: { schoolId: school.id, plan: 'ACTIVE', trialEndsAt: subEndsAt, studentCount: 100 },
+  })
+  const SEED_MODULES: [string, number][] = [
+    ['FINANCE_TAX', 2000], ['EXAM_CAS', 1500], ['TRANSPORT_GPS', 500],
+    ['MOBILE_APP', 833], ['HIGHER_EDUCATION', 2500], ['ONLINE_LEARNING', 1500],
+  ]
+  for (const [moduleKey, monthlyPrice] of SEED_MODULES) {
+    await prisma.schoolModule.upsert({
+      where: { subscriptionId_moduleKey: { subscriptionId: subscription.id, moduleKey } },
+      update: { isActive: true, monthlyPrice },
+      create: { subscriptionId: subscription.id, moduleKey, isActive: true, monthlyPrice },
+    })
+  }
+
   // 4. Create an Admin User
   console.log('Seeding admin user...')
   const hashedPassword = await bcrypt.hash('password123', 10)

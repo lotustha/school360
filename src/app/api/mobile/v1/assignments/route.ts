@@ -10,7 +10,9 @@ export async function GET(req: Request) {
     }
 
     const assignments = await prisma.assignment.findMany({
-      where: { teacherId: session.id },
+      // courseId: null → only K-12 assignments; LMS-course assignments are
+      // managed in the web LMS module and must not leak into the teacher app.
+      where: { teacherId: session.id, courseId: null },
       include: {
         class: { select: { id: true, name: true } },
         subject: { select: { id: true, name: true } },
